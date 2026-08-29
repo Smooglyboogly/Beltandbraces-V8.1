@@ -1,0 +1,2225 @@
+//@version=6
+indicator("GoldEdge V8.1 — Fast EMA + Adaptive Extension + MT5 Automation", shorttitle="Belt and braces ", overlay=true, max_labels_count=300, max_boxes_count=50, max_lines_count=50)
+
+//=============================================================================
+// V8.1 UPGRADE
+// Retains all V8.0 tracking, diagnostics and institutional zones.
+// All former EMA20 entry/extension logic now follows the adjustable Fast EMA.
+// Adds score-adaptive extension limits so Grade A/A+ trends can enter farther from Fast EMA.
+//=============================================================================
+
+// INPUT GROUPS
+string grpTF       = "01 — Timeframes"
+string grpEMA      = "02 — EMA Trend"
+string grpMomentum = "03 — Momentum"
+string grpDecision = "04 — Decision Engine"
+string grpEntry    = "05 — Entry Engine"
+string grpRisk     = "06 — Safe Trade Planner"
+string grpExit     = "07 — Exit Warning"
+string grpZones    = "08 — AI Dashboard + Zones"
+string grpStructurePlan = "09 — Structure Trade Engine"
+string grpSession  = "10 — Sessions"
+string grpVisuals  = "11 — Visuals"
+string grpAuto = "AUTOMATION — MT5 BRIDGE"
+string grpPsych     = "12 — Psychological Levels"
+string grpInstitutional = "13 — Institutional Zones + Review"
+
+// TIMEFRAMES
+string executionTF = input.timeframe("15", "Execution timeframe", group=grpTF)
+string directionTF = input.timeframe("60", "Directional timeframe", group=grpTF)
+string macroTF     = input.timeframe("240", "Macro timeframe", group=grpTF)
+
+// EMA TREND
+int fastLength = input.int(9, "Fast EMA", minval=1, group=grpEMA)
+int midLength  = input.int(21, "Medium EMA", minval=2, group=grpEMA)
+int slowLength = input.int(50, "Slow EMA", minval=3, group=grpEMA)
+int atrLength  = input.int(14, "ATR length", minval=1, group=grpEMA)
+
+float minimumGapATR = input.float(
+     0.08,
+     "Minimum Fast/Medium EMA separation in ATR",
+     minval=0.0,
+     maxval=3.0,
+     step=0.01,
+     group=grpEMA)
+
+// MOMENTUM
+int rsiLength = input.int(14, "RSI length", minval=2, group=grpMomentum)
+int diLength = input.int(14, "DI length", minval=2, group=grpMomentum)
+int adxSmoothing = input.int(14, "ADX smoothing", minval=2, group=grpMomentum)
+
+float minimumADX = input.float(
+     18.0,
+     "Minimum ADX",
+     minval=1.0,
+     maxval=60.0,
+     step=0.5,
+     group=grpMomentum)
+
+float strongADX = input.float(
+     25.0,
+     "Strong ADX",
+     minval=1.0,
+     maxval=70.0,
+     step=0.5,
+     group=grpMomentum)
+
+// DECISION ENGINE
+int actionThreshold = input.int(
+     70,
+     "Action threshold",
+     minval=50,
+     maxval=95,
+     group=grpDecision)
+
+int minimumScoreEdge = input.int(
+     15,
+     "Minimum bull/bear score edge",
+     minval=5,
+     maxval=50,
+     group=grpDecision)
+
+float maximumExtensionATR = input.float(
+     1.20,
+     "Base maximum distance from Fast EMA in ATR",
+     minval=0.20,
+     maxval=5.00,
+     step=0.05,
+     group=grpDecision)
+
+bool useAdaptiveExtension = input.bool(
+     true,
+     "Adapt extension limit for Grade A/A+ trends",
+     group=grpDecision)
+
+float gradeAExtensionATR = input.float(
+     1.80,
+     "Grade A maximum distance from Fast EMA in ATR",
+     minval=0.20,
+     maxval=5.00,
+     step=0.05,
+     group=grpDecision)
+
+float gradeAPlusExtensionATR = input.float(
+     2.20,
+     "Grade A+ maximum distance from Fast EMA in ATR",
+     minval=0.20,
+     maxval=6.00,
+     step=0.05,
+     group=grpDecision)
+
+
+// ENTRY ENGINE
+float pullbackDistanceATR = input.float(
+     0.30,
+     "Maximum pullback distance from Fast EMA in ATR",
+     minval=0.05,
+     maxval=2.00,
+     step=0.05,
+     group=grpEntry)
+
+int cooldownBars = input.int(
+     8,
+     "Signal cooldown bars",
+     minval=1,
+     maxval=100,
+     group=grpEntry)
+
+bool requireCandleConfirmation = input.bool(
+     true,
+     "Require confirming candle direction",
+     group=grpEntry)
+
+bool requireExecutionAlignment = input.bool(
+     true,
+     "Require execution timeframe alignment",
+     group=grpEntry)
+
+bool allowBreakoutEntry = input.bool(
+     false,
+     "Allow breakout entry without Fast EMA pullback",
+     group=grpEntry)
+
+bool enableBGradeEntries = input.bool(
+     true,
+     "Enable B-grade continuation entries",
+     group=grpEntry)
+
+int bGradeScoreDiscount = input.int(
+     10,
+     "B-grade score discount",
+     minval=0,
+     maxval=25,
+     group=grpEntry)
+
+int bGradeMinimumEdge = input.int(
+     8,
+     "B-grade minimum score edge",
+     minval=3,
+     maxval=30,
+     group=grpEntry)
+
+float bGradePullbackATR = input.float(
+     0.55,
+     "B-grade Fast EMA pullback distance in ATR",
+     minval=0.10,
+     maxval=2.00,
+     step=0.05,
+     group=grpEntry)
+
+float bGradeMaximumExtensionATR = input.float(
+     0.85,
+     "B-grade base maximum extension from Fast EMA in ATR",
+     minval=0.20,
+     maxval=3.00,
+     step=0.05,
+     group=grpEntry)
+
+int continuationBreakoutBars = input.int(
+     3,
+     "B-grade continuation breakout bars",
+     minval=2,
+     maxval=10,
+     group=grpEntry)
+
+
+
+// PSYCHOLOGICAL PRICE LEVELS
+bool showPsychLevels = input.bool(true, "Show psychological levels", group=grpPsych)
+bool showQuarterLevels = input.bool(true, "Show $25 quarter levels", group=grpPsych)
+int psychLevelsEachSide = input.int(4, "Levels above/below price", minval=1, maxval=8, group=grpPsych)
+int psychLineLookback = input.int(300, "Line length (bars left)", minval=25, maxval=2000, group=grpPsych)
+bool showPsychLabels = input.bool(true, "Show level labels", group=grpPsych)
+
+// SAFE TRADE PLANNER
+float stopATR = input.float(
+     1.20,
+     "Base stop distance in ATR",
+     minval=0.30,
+     maxval=5.00,
+     step=0.05,
+     group=grpRisk)
+
+string stopLossMode = input.string(
+     "ATR / Structure",
+     "Stop-loss mode",
+     options=["ATR / Structure", "Fixed 100 pips"],
+     tooltip="Fixed 100 pips uses a $10.00 stop distance on XAUUSD (100 × $0.10).",
+     group=grpRisk)
+
+float fixed100PipDistance = 10.00
+
+int swingLookback = input.int(
+     8,
+     "Swing lookback bars",
+     minval=2,
+     maxval=50,
+     group=grpRisk)
+
+float swingBufferATR = input.float(
+     0.10,
+     "Swing buffer in ATR",
+     minval=0.00,
+     maxval=1.00,
+     step=0.05,
+     group=grpRisk)
+
+float maximumStopATR = input.float(
+     3.00,
+     "Maximum allowed stop distance in ATR",
+     minval=0.50,
+     maxval=10.00,
+     step=0.25,
+     group=grpRisk)
+
+float tp1R = input.float(1.0, "TP1 reward multiple", minval=0.5, maxval=5.0, step=0.25, group=grpRisk)
+float tp2R = input.float(2.0, "TP2 reward multiple", minval=0.5, maxval=8.0, step=0.25, group=grpRisk)
+float tp3R = input.float(3.0, "TP3 reward multiple", minval=0.5, maxval=12.0, step=0.25, group=grpRisk)
+
+int planExpiryBars = input.int(
+     24,
+     "Plan expiry bars",
+     minval=1,
+     maxval=200,
+     group=grpRisk)
+
+
+// EXIT WARNING
+bool useExitWarning = input.bool(
+     true,
+     "Enable exit warnings",
+     group=grpExit)
+
+int exitScoreEdge = input.int(
+     8,
+     "Warn when score edge falls below",
+     minval=0,
+     maxval=40,
+     group=grpExit)
+
+float exitADX = input.float(
+     16.0,
+     "Weak momentum ADX level",
+     minval=1.0,
+     maxval=50.0,
+     step=0.5,
+     group=grpExit)
+
+int expiryWarningBars = input.int(
+     3,
+     "Warn this many bars before expiry",
+     minval=1,
+     maxval=20,
+     group=grpExit)
+
+bool warnOnEMA20Loss = input.bool(
+     true,
+     "Warn on Fast EMA loss",
+     group=grpExit)
+
+bool warnOnOppositeScore = input.bool(
+     true,
+     "Warn when opposite score takes control",
+     group=grpExit)
+
+
+// AI DASHBOARD + DYNAMIC ZONES
+float zoneHalfWidthATR = input.float(
+     0.20,
+     "Zone half-width in ATR",
+     minval=0.05,
+     maxval=1.50,
+     step=0.05,
+     group=grpZones)
+
+int zoneProjectionBars = input.int(
+     18,
+     "Zone projection bars",
+     minval=3,
+     maxval=100,
+     group=grpZones)
+
+bool requireBiasForZone = input.bool(
+     true,
+     "Only show zone when directional bias is ready",
+     group=grpZones)
+
+bool showMTFRibbon = input.bool(
+     true,
+     "Show multi-timeframe ribbon",
+     group=grpZones)
+
+bool compactDashboard = input.bool(
+     true,
+     "Use compact AI dashboard",
+     group=grpZones)
+
+float zoneApproachATR = input.float(
+     0.50,
+     "Approaching-zone distance in ATR",
+     minval=0.10,
+     maxval=2.00,
+     step=0.05,
+     group=grpZones)
+
+bool colourZoneByOpportunity = input.bool(
+     true,
+     "Colour zone by opportunity",
+     group=grpZones)
+
+// INSTITUTIONAL ZONES + REVIEW
+bool enableInstitutionalZones = input.bool(true, "Use institutional confluence zones", group=grpInstitutional)
+float institutionalZoneWidth = input.float(4.0, "Zone width ($)", minval=0.5, maxval=20.0, step=0.5, group=grpInstitutional)
+float institutionalEntryInset = input.float(0.5, "Preferred entry inset ($)", minval=0.0, maxval=5.0, step=0.1, group=grpInstitutional)
+int suggestedLayers = input.int(3, "Suggested layers", minval=1, maxval=6, group=grpInstitutional)
+float institutionalPsychStep = input.float(5.0, "Institutional psychological spacing ($)", minval=1.0, maxval=100.0, step=1.0, group=grpInstitutional)
+float confluenceToleranceATR = input.float(0.35, "Confluence tolerance in ATR", minval=0.05, maxval=2.0, step=0.05, group=grpInstitutional)
+bool showLayerLines = input.bool(true, "Show first three suggested layer lines", group=grpInstitutional)
+bool manualCloseCurrentTrade = input.bool(false, "MANUAL CLOSE current trade (turn off after use)", group=grpInstitutional)
+
+
+// PRACTICAL GOLD TARGETS
+float firstTargetDollars = input.float(
+     1.50,
+     "TP1 distance from entry ($)",
+     minval=0.10,
+     maxval=25.00,
+     step=0.10,
+     group=grpStructurePlan)
+
+float targetStepDollars = input.float(
+     2.00,
+     "Additional distance per target ($)",
+     minval=0.10,
+     maxval=25.00,
+     step=0.10,
+     group=grpStructurePlan)
+
+// STRUCTURE TRADE ENGINE
+int structureSwingLeft = input.int(
+     3,
+     "Trade swing pivot left bars",
+     minval=1,
+     maxval=20,
+     group=grpStructurePlan)
+
+int structureSwingRight = input.int(
+     3,
+     "Trade swing pivot right bars",
+     minval=1,
+     maxval=20,
+     group=grpStructurePlan)
+
+int structureLookback = input.int(
+     120,
+     "Structure target lookback bars",
+     minval=20,
+     maxval=500,
+     group=grpStructurePlan)
+
+float stopBufferATR = input.float(
+     0.15,
+     "Stop buffer beyond swing in ATR",
+     minval=0.00,
+     maxval=1.50,
+     step=0.05,
+     group=grpStructurePlan)
+
+float minimumStopATR = input.float(
+     0.60,
+     "Minimum stop distance in ATR",
+     minval=0.20,
+     maxval=5.00,
+     step=0.05,
+     group=grpStructurePlan)
+
+float maximumStructureStopATR = input.float(
+     3.00,
+     "Maximum stop distance in ATR",
+     minval=0.50,
+     maxval=10.00,
+     step=0.25,
+     group=grpStructurePlan)
+
+float minimumTargetR = input.float(
+     0.75,
+     "Minimum target distance in R",
+     minval=0.25,
+     maxval=5.00,
+     step=0.25,
+     group=grpStructurePlan)
+
+float fallbackTP2R = input.float(
+     2.0,
+     "Fallback TP2 reward multiple",
+     minval=1.0,
+     maxval=8.0,
+     step=0.25,
+     group=grpStructurePlan)
+
+float fallbackTP3R = input.float(
+     3.0,
+     "Fallback TP3 reward multiple",
+     minval=1.5,
+     maxval=12.0,
+     step=0.25,
+     group=grpStructurePlan)
+
+int exitWarningMinimumConditions = input.int(
+     2,
+     "Exit warning minimum weakening conditions",
+     minval=2,
+     maxval=4,
+     group=grpStructurePlan)
+
+// SESSIONS
+bool useSessionFilter = input.bool(false, "Require London or New York for action", group=grpSession)
+string londonSession = input.session("0700-1600", "London session", group=grpSession)
+string newYorkSession = input.session("1300-2100", "New York session", group=grpSession)
+
+string sessionZone = input.string(
+     "Europe/London",
+     "Session timezone",
+     options=["Europe/London", "America/New_York", "Etc/UTC"],
+     group=grpSession)
+
+// VISUALS
+bool showFastEMA = input.bool(true, "Show Fast EMA", group=grpVisuals)
+bool showMidEMA = input.bool(true, "Show Medium EMA", group=grpVisuals)
+bool showSlowEMA = input.bool(true, "Show Fast EMA0", group=grpVisuals)
+bool showDashboard = input.bool(true, "Show dashboard", group=grpVisuals)
+bool showSignals = input.bool(true, "Show BUY/SELL labels", group=grpVisuals)
+bool showTradePlan = input.bool(true, "Show latest trade plan", group=grpVisuals)
+int initialPlanLineBars = input.int(4, "Minimum initial trade-line length (bars)", minval=1, maxval=20, group=grpVisuals, tooltip="When a new trade first appears, Entry, SL and TP lines extend this many bars to the right so they are easier to spot.")
+bool showExitWarnings = input.bool(true, "Show EXIT WARNING labels", group=grpVisuals)
+bool showEntryZones = input.bool(true, "Show dynamic buy/sell zones", group=grpVisuals)
+bool colourBars = input.bool(false, "Colour bars by decision", group=grpVisuals)
+
+string dashboardTradeMode = input.string("Current/latest", "Dashboard trade", options=["Current/latest", "Review historical trade"], group=grpVisuals)
+int selectedTradeNumber = input.int(0, "Historical trade number (0 = latest)", minval=0, maxval=49, group=grpVisuals)
+bool highlightReviewedTrade = input.bool(true, "Highlight reviewed trade on chart", group=grpVisuals)
+bool showAllTradeAnalysisLabels = input.bool(false, "Show analysis labels for all 50 trades", group=grpVisuals)
+bool showRejectedSetupDiagnostics = input.bool(false, "Show blocked/near-miss setup reasons", group=grpVisuals, tooltip="Adds small grey labels when a BUY or SELL nearly qualifies, showing the main rule that blocked it. Diagnostic only; it does not alter signals.")
+
+
+bool enableMT5Automation = input.bool(false, "Enable MT5 automation alerts", group=grpAuto)
+string automationKey = input.string("CHANGE_ME", "Bridge key (do not use broker password)", group=grpAuto)
+string automationSymbol = input.string("XAUUSD", "MT5 symbol", group=grpAuto)
+float automationRiskPct = input.float(0.25, "Requested risk %", minval=0.05, maxval=5.00, step=0.05, group=grpAuto)
+int automationTTLSeconds = input.int(120, "Signal expiry (seconds)", minval=30, maxval=900, group=grpAuto)
+bool automateAGrade = input.bool(true, "Automate A-grade trades", group=grpAuto)
+bool automateBGrade = input.bool(false, "Automate B-grade trades", group=grpAuto)
+
+//=============================================================================
+// HELPER FUNCTIONS
+//=============================================================================
+f_clamp(float value, float minimum, float maximum) =>
+    math.max(minimum, math.min(maximum, value))
+
+f_stateText(bool bull, bool bear) =>
+    string result = "Neutral"
+    if bull and not bear
+        result := "Bullish"
+    else if bear and not bull
+        result := "Bearish"
+    result
+
+f_stateColour(bool bull, bool bear) =>
+    color result = color.silver
+    if bull and not bear
+        result := color.lime
+    else if bear and not bull
+        result := color.red
+    result
+
+f_grade(float score) =>
+    string result = "D"
+    if score >= 88
+        result := "A+"
+    else if score >= 80
+        result := "A"
+    else if score >= 70
+        result := "B"
+    else if score >= 60
+        result := "C"
+    result
+
+f_scoreColour(float score) =>
+    color result = color.red
+    if score >= 80
+        result := color.lime
+    else if score >= 70
+        result := color.new(color.lime, 20)
+    else if score >= 60
+        result := color.orange
+    result
+
+//=============================================================================
+// LOCAL DATA
+//=============================================================================
+float ema20 = ta.ema(close, fastLength)
+float ema50 = ta.ema(close, midLength)
+float ema200 = ta.ema(close, slowLength)
+
+float atrValue = ta.atr(atrLength)
+float rsiValue = ta.rsi(close, rsiLength)
+[plusDI, minusDI, adxValue] = ta.dmi(diLength, adxSmoothing)
+
+float emaGapATR = math.abs(ema20 - ema50) / math.max(atrValue, syminfo.mintick)
+float extensionATR = math.abs(close - ema20) / math.max(atrValue, syminfo.mintick)
+
+bool localBull =
+     close > ema20 and
+     ema20 > ema50 and
+     ema50 > ema200 and
+     ema20 > ema20[1]
+
+bool localBear =
+     close < ema20 and
+     ema20 < ema50 and
+     ema50 < ema200 and
+     ema20 < ema20[1]
+
+//=============================================================================
+// MULTI-TIMEFRAME DATA
+// Separate request.security calls are used deliberately for Pine reliability.
+//=============================================================================
+float execClose = request.security(
+     syminfo.tickerid,
+     executionTF,
+     close,
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float execEMA20 = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, fastLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float execEMA50 = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, midLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float execEMA200 = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, slowLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+bool execEMA20Rising = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, fastLength) > ta.ema(close, fastLength)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+bool execEMA20Falling = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, fastLength) < ta.ema(close, fastLength)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float directionClose = request.security(
+     syminfo.tickerid,
+     directionTF,
+     close,
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float directionEMA20 = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, fastLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float directionEMA50 = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, midLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float directionEMA200 = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, slowLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+bool directionEMA20Rising = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, fastLength) > ta.ema(close, fastLength)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+bool directionEMA20Falling = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, fastLength) < ta.ema(close, fastLength)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float macroClose = request.security(
+     syminfo.tickerid,
+     macroTF,
+     close,
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float macroEMA20 = request.security(
+     syminfo.tickerid,
+     macroTF,
+     ta.ema(close, fastLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float macroEMA50 = request.security(
+     syminfo.tickerid,
+     macroTF,
+     ta.ema(close, midLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float macroEMA200 = request.security(
+     syminfo.tickerid,
+     macroTF,
+     ta.ema(close, slowLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+//=============================================================================
+// TIMEFRAME STATES
+//=============================================================================
+bool executionBull =
+     execClose > execEMA20 and
+     execEMA20 > execEMA50 and
+     execEMA50 > execEMA200 and
+     execEMA20Rising
+
+bool executionBear =
+     execClose < execEMA20 and
+     execEMA20 < execEMA50 and
+     execEMA50 < execEMA200 and
+     execEMA20Falling
+
+bool directionBull =
+     directionClose > directionEMA20 and
+     directionEMA20 > directionEMA50 and
+     directionEMA50 > directionEMA200 and
+     directionEMA20Rising
+
+bool directionBear =
+     directionClose < directionEMA20 and
+     directionEMA20 < directionEMA50 and
+     directionEMA50 < directionEMA200 and
+     directionEMA20Falling
+
+bool macroBull =
+     macroClose > macroEMA200 and
+     macroEMA20 > macroEMA50
+
+bool macroBear =
+     macroClose < macroEMA200 and
+     macroEMA20 < macroEMA50
+
+//=============================================================================
+// SESSION STATUS
+//=============================================================================
+bool londonActive = not na(time(timeframe.period, londonSession, sessionZone))
+bool newYorkActive = not na(time(timeframe.period, newYorkSession, sessionZone))
+bool overlapActive = londonActive and newYorkActive
+bool sessionActive = londonActive or newYorkActive
+
+string sessionText = "Closed"
+color sessionColour = color.silver
+
+if overlapActive
+    sessionText := "Overlap"
+    sessionColour := color.aqua
+else if londonActive
+    sessionText := "London"
+    sessionColour := color.blue
+else if newYorkActive
+    sessionText := "New York"
+    sessionColour := color.orange
+
+//=============================================================================
+// 100-POINT CONFLUENCE ENGINE
+//=============================================================================
+float bullScoreRaw = 0.0
+float bearScoreRaw = 0.0
+
+// Local trend — 30 points.
+bullScoreRaw += close > ema200 ? 10 : 0
+bearScoreRaw += close < ema200 ? 10 : 0
+
+bullScoreRaw += ema20 > ema50 ? 8 : 0
+bearScoreRaw += ema20 < ema50 ? 8 : 0
+
+bullScoreRaw += ema50 > ema200 ? 7 : 0
+bearScoreRaw += ema50 < ema200 ? 7 : 0
+
+bullScoreRaw += ema20 > ema20[1] ? 5 : 0
+bearScoreRaw += ema20 < ema20[1] ? 5 : 0
+
+// Higher timeframes — 36 points.
+bullScoreRaw += executionBull ? 14 : 0
+bearScoreRaw += executionBear ? 14 : 0
+
+bullScoreRaw += directionBull ? 12 : 0
+bearScoreRaw += directionBear ? 12 : 0
+
+bullScoreRaw += macroBull ? 10 : 0
+bearScoreRaw += macroBear ? 10 : 0
+
+// Momentum — 22 points.
+bullScoreRaw += adxValue >= minimumADX and plusDI > minusDI ? 8 : 0
+bearScoreRaw += adxValue >= minimumADX and minusDI > plusDI ? 8 : 0
+
+bullScoreRaw += adxValue >= strongADX ? 4 : 0
+bearScoreRaw += adxValue >= strongADX ? 4 : 0
+
+bullScoreRaw += rsiValue > 52 and rsiValue < 72 ? 7 : 0
+bearScoreRaw += rsiValue < 48 and rsiValue > 28 ? 7 : 0
+
+bullScoreRaw += emaGapATR >= minimumGapATR ? 3 : 0
+bearScoreRaw += emaGapATR >= minimumGapATR ? 3 : 0
+
+// Session — 4 points.
+bullScoreRaw += sessionActive ? 4 : 0
+bearScoreRaw += sessionActive ? 4 : 0
+
+// Price-location quality — 8 points.
+bullScoreRaw += close > ema20 and extensionATR <= maximumExtensionATR ? 8 : 0
+bearScoreRaw += close < ema20 and extensionATR <= maximumExtensionATR ? 8 : 0
+
+// Overextension and exhaustion penalties.
+if close > ema20 and extensionATR > maximumExtensionATR
+    bullScoreRaw -= 10
+
+if close < ema20 and extensionATR > maximumExtensionATR
+    bearScoreRaw -= 10
+
+if rsiValue >= 75
+    bullScoreRaw -= 8
+
+if rsiValue <= 25
+    bearScoreRaw -= 8
+
+float bullScore = f_clamp(bullScoreRaw, 0, 100)
+float bearScore = f_clamp(bearScoreRaw, 0, 100)
+float scoreEdge = math.abs(bullScore - bearScore)
+
+// Score-adaptive chase protection. Lower grades retain the base limit;
+// Grade A and A+ trends receive extra room when enabled.
+f_extensionLimit(float directionalScore) =>
+    float result = maximumExtensionATR
+    if useAdaptiveExtension
+        if directionalScore >= 88
+            result := math.max(maximumExtensionATR, gradeAPlusExtensionATR)
+        else if directionalScore >= 80
+            result := math.max(maximumExtensionATR, gradeAExtensionATR)
+    result
+
+float bullishExtensionLimitATR = f_extensionLimit(bullScore)
+float bearishExtensionLimitATR = f_extensionLimit(bearScore)
+bool bullishExtensionOK = extensionATR <= bullishExtensionLimitATR
+bool bearishExtensionOK = extensionATR <= bearishExtensionLimitATR
+float activeExtensionLimitATR = bullScore >= bearScore ? bullishExtensionLimitATR : bearishExtensionLimitATR
+
+//=============================================================================
+// DECISION AND ENTRY ENGINE
+//=============================================================================
+bool sessionOK = not useSessionFilter or sessionActive
+bool extensionOK = extensionATR <= activeExtensionLimitATR
+
+bool bullishBiasReady =
+     bullScore >= actionThreshold and
+     bullScore > bearScore and
+     scoreEdge >= minimumScoreEdge and
+     sessionOK
+
+bool bearishBiasReady =
+     bearScore >= actionThreshold and
+     bearScore > bullScore and
+     scoreEdge >= minimumScoreEdge and
+     sessionOK
+
+bool bullishCandleOK = not requireCandleConfirmation or close > open
+bool bearishCandleOK = not requireCandleConfirmation or close < open
+
+bool executionLongOK = not requireExecutionAlignment or executionBull
+bool executionShortOK = not requireExecutionAlignment or executionBear
+
+bool bullishPullbackTouch =
+     low <= ema20 + atrValue * pullbackDistanceATR and
+     close > ema20
+
+bool bearishPullbackTouch =
+     high >= ema20 - atrValue * pullbackDistanceATR and
+     close < ema20
+
+bool bullishBreakout =
+     allowBreakoutEntry and
+     close > high[1] and
+     close > ema20 and
+     bullishExtensionOK
+
+bool bearishBreakout =
+     allowBreakoutEntry and
+     close < low[1] and
+     close < ema20 and
+     bearishExtensionOK
+
+// A-grade trigger: the original high-confluence pullback setup.
+bool bullishATrigger =
+     (bullishPullbackTouch or bullishBreakout) and
+     bullishCandleOK and
+     executionLongOK and
+     bullishExtensionOK
+
+bool bearishATrigger =
+     (bearishPullbackTouch or bearishBreakout) and
+     bearishCandleOK and
+     executionShortOK and
+     bearishExtensionOK
+
+// B-grade bias: slightly lower score requirements, but trend must still agree.
+float bGradeThreshold = math.max(actionThreshold - bGradeScoreDiscount, 50)
+float bullishBGradeExtensionLimitATR = useAdaptiveExtension and bullScore >= 80 ? math.max(bGradeMaximumExtensionATR, bullishExtensionLimitATR) : bGradeMaximumExtensionATR
+float bearishBGradeExtensionLimitATR = useAdaptiveExtension and bearScore >= 80 ? math.max(bGradeMaximumExtensionATR, bearishExtensionLimitATR) : bGradeMaximumExtensionATR
+
+bool bullishBGradeBias =
+     enableBGradeEntries and
+     bullScore >= bGradeThreshold and
+     bullScore > bearScore and
+     scoreEdge >= bGradeMinimumEdge and
+     sessionOK and
+     localBull and
+     not executionBear
+
+bool bearishBGradeBias =
+     enableBGradeEntries and
+     bearScore >= bGradeThreshold and
+     bearScore > bullScore and
+     scoreEdge >= bGradeMinimumEdge and
+     sessionOK and
+     localBear and
+     not executionBull
+
+bool bullishBGradePullback =
+     low <= ema20 + atrValue * bGradePullbackATR and
+     close > ema20 and
+     close > open and
+     close >= close[1]
+
+bool bearishBGradePullback =
+     high >= ema20 - atrValue * bGradePullbackATR and
+     close < ema20 and
+     close < open and
+     close <= close[1]
+
+float priorContinuationHigh = ta.highest(high, continuationBreakoutBars)[1]
+float priorContinuationLow = ta.lowest(low, continuationBreakoutBars)[1]
+
+bool bullishContinuation =
+     close > priorContinuationHigh and
+     close > ema20 and
+     ema20 > ema50 and
+     extensionATR <= bullishBGradeExtensionLimitATR
+
+bool bearishContinuation =
+     close < priorContinuationLow and
+     close < ema20 and
+     ema20 < ema50 and
+     extensionATR <= bearishBGradeExtensionLimitATR
+
+bool bullishBTrigger =
+     bullishBGradeBias and
+     (bullishBGradePullback or bullishContinuation) and
+     extensionATR <= bullishBGradeExtensionLimitATR
+
+bool bearishBTrigger =
+     bearishBGradeBias and
+     (bearishBGradePullback or bearishContinuation) and
+     extensionATR <= bearishBGradeExtensionLimitATR
+
+// Backward-compatible combined triggers.
+bool bullishTrigger = bullishATrigger or bullishBTrigger
+bool bearishTrigger = bearishATrigger or bearishBTrigger
+
+
+//=============================================================================
+// STRUCTURE LEVEL ENGINE
+//=============================================================================
+float tradePivotHigh = ta.pivothigh(high, structureSwingLeft, structureSwingRight)
+float tradePivotLow = ta.pivotlow(low, structureSwingLeft, structureSwingRight)
+
+var float structureHigh1 = na
+var float structureHigh2 = na
+var float structureHigh3 = na
+var float structureLow1 = na
+var float structureLow2 = na
+var float structureLow3 = na
+
+if not na(tradePivotHigh)
+    structureHigh3 := structureHigh2
+    structureHigh2 := structureHigh1
+    structureHigh1 := tradePivotHigh
+
+if not na(tradePivotLow)
+    structureLow3 := structureLow2
+    structureLow2 := structureLow1
+    structureLow1 := tradePivotLow
+
+f_validLongTarget(float level, float entry, float minimumDistance) =>
+    not na(level) and level > entry + minimumDistance
+
+f_validShortTarget(float level, float entry, float minimumDistance) =>
+    not na(level) and level < entry - minimumDistance
+
+var int lastSignalBar = na
+var int planDirection = 0
+var int planStartBar = na
+var float planEntry = na
+var float planStop = na
+var float planTP1 = na
+var float planTP2 = na
+var float planTP3 = na
+var string planStatus = "Waiting"
+var string planSetupGrade = "—"
+var bool exitWarningIssued = false
+var string exitWarningReason = "None"
+
+// Retained trade history. Index 0 is the newest signal.
+var array<int> histDirection = array.new_int()
+var array<int> histStartBar = array.new_int()
+var array<float> histEntry = array.new_float()
+var array<float> histStop = array.new_float()
+var array<float> histTP1 = array.new_float()
+var array<float> histTP2 = array.new_float()
+var array<float> histTP3 = array.new_float()
+var array<string> histGrade = array.new_string()
+var array<float> histBullScore = array.new_float()
+var array<float> histBearScore = array.new_float()
+var array<float> histADX = array.new_float()
+var array<float> histRSI = array.new_float()
+var array<string> histStatus = array.new_string()
+var array<string> histExitReason = array.new_string()
+var array<int> histBars = array.new_int()
+var array<bool> histTP1Hit = array.new_bool()
+var array<bool> histTP2Hit = array.new_bool()
+var array<bool> histTP3Hit = array.new_bool()
+var array<bool> histStopHit = array.new_bool()
+// Maximum favourable movement measured from the bar AFTER entry through the
+// full original plan-expiry window, even when TP3 closes the live plan early.
+var array<float> histMaxFavourable = array.new_float()
+var array<float> histBeyondTP3 = array.new_float()
+
+f_trimTradeHistory() =>
+    if array.size(histDirection) > 50
+        array.pop(histDirection)
+        array.pop(histStartBar)
+        array.pop(histEntry)
+        array.pop(histStop)
+        array.pop(histTP1)
+        array.pop(histTP2)
+        array.pop(histTP3)
+        array.pop(histGrade)
+        array.pop(histBullScore)
+        array.pop(histBearScore)
+        array.pop(histADX)
+        array.pop(histRSI)
+        array.pop(histStatus)
+        array.pop(histExitReason)
+        array.pop(histBars)
+        array.pop(histTP1Hit)
+        array.pop(histTP2Hit)
+        array.pop(histTP3Hit)
+        array.pop(histStopHit)
+        array.pop(histMaxFavourable)
+        array.pop(histBeyondTP3)
+
+bool planActive = planDirection != 0
+bool cooldownOK = na(lastSignalBar) or bar_index - lastSignalBar >= cooldownBars
+
+bool buyASignal =
+     barstate.isconfirmed and
+     bullishBiasReady and
+     bullishATrigger and
+     cooldownOK and
+     not planActive
+
+bool sellASignal =
+     barstate.isconfirmed and
+     bearishBiasReady and
+     bearishATrigger and
+     cooldownOK and
+     not planActive
+
+bool buyBSignal =
+     barstate.isconfirmed and
+     not buyASignal and
+     bullishBTrigger and
+     cooldownOK and
+     not planActive
+
+bool sellBSignal =
+     barstate.isconfirmed and
+     not sellASignal and
+     bearishBTrigger and
+     cooldownOK and
+     not planActive
+
+bool buySignal = buyASignal or buyBSignal
+bool sellSignal = sellASignal or sellBSignal
+
+// Optional near-miss diagnostics. These labels explain the main veto without
+// altering the trading logic. They are deliberately rate-limited.
+var int lastRejectedDiagnosticBar = na
+bool diagnosticSpacingOK = na(lastRejectedDiagnosticBar) or bar_index - lastRejectedDiagnosticBar >= cooldownBars
+bool nearBuyCandidate = bullScore >= math.max(bGradeThreshold - 5, 45) and bullScore > bearScore
+bool nearSellCandidate = bearScore >= math.max(bGradeThreshold - 5, 45) and bearScore > bullScore
+
+string buyBlockedReason = not sessionOK ? "Session filter" : bullScore < bGradeThreshold ? "Score below threshold" : scoreEdge < bGradeMinimumEdge ? "Score edge too small" : not localBull ? "Local trend not bullish" : executionBear ? "Execution trend bearish" : not bullishCandleOK ? "No bullish candle confirm" : extensionATR > bullishBGradeExtensionLimitATR ? "Too extended from Fast EMA" : not (bullishPullbackTouch or bullishBreakout or bullishBGradePullback or bullishContinuation) ? "No pullback / continuation trigger" : not cooldownOK ? "Signal cooldown" : planActive ? "Trade already active" : "Entry conditions incomplete"
+string sellBlockedReason = not sessionOK ? "Session filter" : bearScore < bGradeThreshold ? "Score below threshold" : scoreEdge < bGradeMinimumEdge ? "Score edge too small" : not localBear ? "Local trend not bearish" : executionBull ? "Execution trend bullish" : not bearishCandleOK ? "No bearish candle confirm" : extensionATR > bearishBGradeExtensionLimitATR ? "Too extended from Fast EMA" : not (bearishPullbackTouch or bearishBreakout or bearishBGradePullback or bearishContinuation) ? "No pullback / continuation trigger" : not cooldownOK ? "Signal cooldown" : planActive ? "Trade already active" : "Entry conditions incomplete"
+
+if showRejectedSetupDiagnostics and barstate.isconfirmed and diagnosticSpacingOK and not buySignal and not sellSignal and not planActive
+    if nearSellCandidate
+        label.new(bar_index, high, "SELL BLOCKED\n" + sellBlockedReason, style=label.style_label_down, color=color.new(color.gray, 15), textcolor=color.white, size=size.tiny)
+        lastRejectedDiagnosticBar := bar_index
+    else if nearBuyCandidate
+        label.new(bar_index, low, "BUY BLOCKED\n" + buyBlockedReason, style=label.style_label_up, color=color.new(color.gray, 15), textcolor=color.white, size=size.tiny)
+        lastRejectedDiagnosticBar := bar_index
+
+if buySignal
+    lastSignalBar := bar_index
+    planSetupGrade := buyASignal ? "A" : "B"
+    planDirection := 1
+    planStartBar := bar_index
+    planEntry := close
+
+    float minLongRisk = atrValue * minimumStopATR
+    float maxLongRisk = atrValue * maximumStructureStopATR
+    float fallbackLongStop = planEntry - minLongRisk
+
+    bool validSwingLow1 = not na(structureLow1) and structureLow1 < planEntry
+    bool validSwingLow2 = not na(structureLow2) and structureLow2 < planEntry
+    float selectedLongSwing = validSwingLow1 ? structureLow1 : validSwingLow2 ? structureLow2 : na
+
+    float rawLongStop = not na(selectedLongSwing) ? selectedLongSwing - atrValue * stopBufferATR : fallbackLongStop
+    float boundedLongStop = math.max(rawLongStop, planEntry - maxLongRisk)
+    float atrStructureLongStop = math.min(boundedLongStop, planEntry - minLongRisk)
+    planStop := stopLossMode == "Fixed 100 pips" ? planEntry - fixed100PipDistance : atrStructureLongStop
+
+    float longRisk = math.max(planEntry - planStop, syminfo.mintick)
+
+    // Practical XAUUSD targets:
+    // TP1 = entry + first target distance
+    // TP2 = TP1 + target step
+    // TP3 = TP2 + target step
+    planTP1 := planEntry + firstTargetDollars
+    planTP2 := planTP1 + targetStepDollars
+    planTP3 := planTP2 + targetStepDollars
+
+    planStatus := "LONG ACTIVE"
+    exitWarningIssued := false
+    exitWarningReason := "None"
+
+    array.unshift(histDirection, 1)
+    array.unshift(histStartBar, bar_index)
+    array.unshift(histEntry, planEntry)
+    array.unshift(histStop, planStop)
+    array.unshift(histTP1, planTP1)
+    array.unshift(histTP2, planTP2)
+    array.unshift(histTP3, planTP3)
+    array.unshift(histGrade, planSetupGrade)
+    array.unshift(histBullScore, bullScore)
+    array.unshift(histBearScore, bearScore)
+    array.unshift(histADX, adxValue)
+    array.unshift(histRSI, rsiValue)
+    array.unshift(histStatus, "LONG ACTIVE")
+    array.unshift(histExitReason, "None")
+    array.unshift(histBars, 0)
+    array.unshift(histTP1Hit, false)
+    array.unshift(histTP2Hit, false)
+    array.unshift(histTP3Hit, false)
+    array.unshift(histStopHit, false)
+    array.unshift(histMaxFavourable, 0.0)
+    array.unshift(histBeyondTP3, 0.0)
+    f_trimTradeHistory()
+
+if sellSignal
+    lastSignalBar := bar_index
+    planSetupGrade := sellASignal ? "A" : "B"
+    planDirection := -1
+    planStartBar := bar_index
+    planEntry := close
+
+    float minShortRisk = atrValue * minimumStopATR
+    float maxShortRisk = atrValue * maximumStructureStopATR
+    float fallbackShortStop = planEntry + minShortRisk
+
+    bool validSwingHigh1 = not na(structureHigh1) and structureHigh1 > planEntry
+    bool validSwingHigh2 = not na(structureHigh2) and structureHigh2 > planEntry
+    float selectedShortSwing = validSwingHigh1 ? structureHigh1 : validSwingHigh2 ? structureHigh2 : na
+
+    float rawShortStop = not na(selectedShortSwing) ? selectedShortSwing + atrValue * stopBufferATR : fallbackShortStop
+    float boundedShortStop = math.min(rawShortStop, planEntry + maxShortRisk)
+    float atrStructureShortStop = math.max(boundedShortStop, planEntry + minShortRisk)
+    planStop := stopLossMode == "Fixed 100 pips" ? planEntry + fixed100PipDistance : atrStructureShortStop
+
+    float shortRisk = math.max(planStop - planEntry, syminfo.mintick)
+
+    // Practical XAUUSD targets:
+    // TP1 = entry - first target distance
+    // TP2 = TP1 - target step
+    // TP3 = TP2 - target step
+    planTP1 := planEntry - firstTargetDollars
+    planTP2 := planTP1 - targetStepDollars
+    planTP3 := planTP2 - targetStepDollars
+
+    planStatus := "SHORT ACTIVE"
+    exitWarningIssued := false
+    exitWarningReason := "None"
+
+    array.unshift(histDirection, -1)
+    array.unshift(histStartBar, bar_index)
+    array.unshift(histEntry, planEntry)
+    array.unshift(histStop, planStop)
+    array.unshift(histTP1, planTP1)
+    array.unshift(histTP2, planTP2)
+    array.unshift(histTP3, planTP3)
+    array.unshift(histGrade, planSetupGrade)
+    array.unshift(histBullScore, bullScore)
+    array.unshift(histBearScore, bearScore)
+    array.unshift(histADX, adxValue)
+    array.unshift(histRSI, rsiValue)
+    array.unshift(histStatus, "SHORT ACTIVE")
+    array.unshift(histExitReason, "None")
+    array.unshift(histBars, 0)
+    array.unshift(histTP1Hit, false)
+    array.unshift(histTP2Hit, false)
+    array.unshift(histTP3Hit, false)
+    array.unshift(histStopHit, false)
+    array.unshift(histMaxFavourable, 0.0)
+    array.unshift(histBeyondTP3, 0.0)
+    f_trimTradeHistory()
+
+// Update the full-window maximum favourable excursion for every retained trade.
+// Entry occurs at the signal bar close, so measurement begins on the next bar.
+int excursionHistoryCount = array.size(histDirection)
+if excursionHistoryCount > 0
+    for i = 0 to excursionHistoryCount - 1
+        int excursionStart = array.get(histStartBar, i)
+        int excursionAge = bar_index - excursionStart
+        if excursionAge >= 1 and excursionAge <= planExpiryBars
+            int excursionDirection = array.get(histDirection, i)
+            float excursionEntry = array.get(histEntry, i)
+            float excursionTP3 = array.get(histTP3, i)
+            float favourableMove = excursionDirection == 1 ? math.max(high - excursionEntry, 0.0) : math.max(excursionEntry - low, 0.0)
+            float updatedMFE = math.max(array.get(histMaxFavourable, i), favourableMove)
+            float tp3Distance = math.abs(excursionTP3 - excursionEntry)
+            array.set(histMaxFavourable, i, updatedMFE)
+            array.set(histBeyondTP3, i, math.max(updatedMFE - tp3Distance, 0.0))
+
+// Re-evaluate TP1/TP2/TP3 and SL for EVERY retained trade throughout its
+// complete original expiry window. This prevents the latest trade freezing at
+// TP1 and keeps historical BUY/SELL statistics tied to one shared outcome rule.
+// Entry is at the signal-bar close, so target/stop checks begin on the next bar.
+int outcomeHistoryCount = array.size(histDirection)
+if outcomeHistoryCount > 0
+    for i = 0 to outcomeHistoryCount - 1
+        int outcomeStart = array.get(histStartBar, i)
+        int outcomeAge = bar_index - outcomeStart
+        if outcomeAge >= 1 and outcomeAge <= planExpiryBars
+            int outcomeDirection = array.get(histDirection, i)
+            float outcomeStop = array.get(histStop, i)
+            float outcomeTP1 = array.get(histTP1, i)
+            float outcomeTP2 = array.get(histTP2, i)
+            float outcomeTP3 = array.get(histTP3, i)
+            bool outcomeLong = outcomeDirection == 1
+            bool hitTP1Now = outcomeLong ? high >= outcomeTP1 : low <= outcomeTP1
+            bool hitTP2Now = outcomeLong ? high >= outcomeTP2 : low <= outcomeTP2
+            bool hitTP3Now = outcomeLong ? high >= outcomeTP3 : low <= outcomeTP3
+            bool hitStopNow = outcomeLong ? low <= outcomeStop : high >= outcomeStop
+            // A trade is "closed" the first time either a TP or the stop is touched.
+            // Once closed, later bars must not change the recorded outcome -- price
+            // wandering back through an old TP level after the position would
+            // already have been stopped out must NOT flip a recorded loss into a win.
+            bool wasAlreadyClosed = array.get(histStopHit, i) or array.get(histTP1Hit, i) or array.get(histTP2Hit, i) or array.get(histTP3Hit, i)
+            bool updatedTP3 = array.get(histTP3Hit, i) or (not wasAlreadyClosed and hitTP3Now)
+            bool updatedTP2 = array.get(histTP2Hit, i) or (not wasAlreadyClosed and hitTP2Now) or updatedTP3
+            bool updatedTP1 = array.get(histTP1Hit, i) or (not wasAlreadyClosed and hitTP1Now) or updatedTP2
+            bool updatedStopFlag = array.get(histStopHit, i) or (not wasAlreadyClosed and hitStopNow)
+            array.set(histTP1Hit, i, updatedTP1)
+            array.set(histTP2Hit, i, updatedTP2)
+            array.set(histTP3Hit, i, updatedTP3)
+            array.set(histStopHit, i, updatedStopFlag)
+            array.set(histBars, i, math.min(outcomeAge, planExpiryBars))
+
+bool longStopHit = planDirection == 1 and low <= planStop
+bool shortStopHit = planDirection == -1 and high >= planStop
+bool longTP3Hit = planDirection == 1 and high >= planTP3
+bool shortTP3Hit = planDirection == -1 and low <= planTP3
+bool planExpired = planActive and not na(planStartBar) and bar_index - planStartBar >= planExpiryBars
+
+int planAge = planActive and not na(planStartBar) ? bar_index - planStartBar : 0
+bool nearExpiry = planActive and planAge >= math.max(planExpiryBars - expiryWarningBars, 1)
+
+bool longEMAWarning =
+     planDirection == 1 and
+     warnOnEMA20Loss and
+     close < ema20
+
+bool shortEMAWarning =
+     planDirection == -1 and
+     warnOnEMA20Loss and
+     close > ema20
+
+bool longScoreWarning =
+     planDirection == 1 and
+     (scoreEdge < exitScoreEdge or (warnOnOppositeScore and bearScore >= bullScore))
+
+bool shortScoreWarning =
+     planDirection == -1 and
+     (scoreEdge < exitScoreEdge or (warnOnOppositeScore and bullScore >= bearScore))
+
+bool longMomentumWarning =
+     planDirection == 1 and
+     minusDI > plusDI and
+     rsiValue < 50
+
+bool shortMomentumWarning =
+     planDirection == -1 and
+     plusDI > minusDI and
+     rsiValue > 50
+
+bool longADXWarning =
+     planDirection == 1 and
+     adxValue < exitADX
+
+bool shortADXWarning =
+     planDirection == -1 and
+     adxValue < exitADX
+
+int exitWeaknessCount = 0
+exitWeaknessCount += longEMAWarning or shortEMAWarning ? 1 : 0
+exitWeaknessCount += longScoreWarning or shortScoreWarning ? 1 : 0
+exitWeaknessCount += longMomentumWarning or shortMomentumWarning ? 1 : 0
+exitWeaknessCount += longADXWarning or shortADXWarning ? 1 : 0
+exitWeaknessCount += nearExpiry ? 1 : 0
+
+bool exitWarningCondition =
+     useExitWarning and
+     planActive and
+     not exitWarningIssued and
+     not buySignal and
+     not sellSignal and
+     exitWeaknessCount >= exitWarningMinimumConditions
+
+bool exitWarning = barstate.isconfirmed and exitWarningCondition
+
+if exitWarning
+    exitWarningIssued := true
+
+    if longScoreWarning or shortScoreWarning
+        exitWarningReason := "Score + momentum weakening"
+    else if longEMAWarning or shortEMAWarning
+        exitWarningReason := "Fast EMA + momentum weakening"
+    else if nearExpiry
+        exitWarningReason := "Plan ageing"
+    else
+        exitWarningReason := "Multiple warnings"
+        label.new(bar_index, planDirection == 1 ? high : low, (planDirection == 1 ? "LONG EXIT WARNING\n" : "SHORT EXIT WARNING\n") + exitWarningReason, style=planDirection == 1 ? label.style_label_down : label.style_label_up, color=color.new(color.orange, 15), textcolor=color.black, size=size.tiny)
+        
+// Update the newest retained trade's live status. Target and stop outcomes are
+// handled above from the trade's own stored levels, not mutable plan variables.
+if planActive and array.size(histDirection) > 0
+    bool historyLong = array.get(histDirection, 0) == 1
+    array.set(histBars, 0, planAge)
+    array.set(histStatus, 0, exitWarningIssued ? (historyLong ? "LONG · EXIT WARNING" : "SHORT · EXIT WARNING") : (historyLong ? "LONG ACTIVE" : "SHORT ACTIVE"))
+    array.set(histExitReason, 0, exitWarningIssued ? exitWarningReason : "None")
+
+bool manualClosePlan = manualCloseCurrentTrade and planActive and barstate.islast
+bool closePlan = longStopHit or shortStopHit or longTP3Hit or shortTP3Hit or planExpired or manualClosePlan
+
+if closePlan
+    if longStopHit or shortStopHit
+        planStatus := "STOP HIT"
+    else if longTP3Hit or shortTP3Hit
+        planStatus := "TP3 HIT"
+    else if manualClosePlan
+        planStatus := array.size(histTP1Hit) > 0 and array.get(histTP1Hit, 0) ? "USER CLOSED · WIN" : "USER CLOSED"
+    else
+        planStatus := "EXPIRED"
+
+    if array.size(histDirection) > 0
+        array.set(histStatus, 0, planStatus)
+        array.set(histExitReason, 0, exitWarningIssued ? exitWarningReason : "None")
+        array.set(histBars, 0, planAge)
+        array.set(histStopHit, 0, longStopHit or shortStopHit or array.get(histStopHit, 0))
+        array.set(histTP3Hit, 0, longTP3Hit or shortTP3Hit or array.get(histTP3Hit, 0))
+
+    planDirection := 0
+    planStartBar := na
+    planEntry := na
+    planStop := na
+    planTP1 := na
+    planTP2 := na
+    planTP3 := na
+    planSetupGrade := "—"
+    exitWarningIssued := false
+
+string actionText = "NO TRADE"
+color actionColour = color.silver
+
+if planDirection == 1
+    actionText := "LONG ACTIVE"
+    actionColour := color.lime
+else if planDirection == -1
+    actionText := "SHORT ACTIVE"
+    actionColour := color.red
+else if buySignal
+    actionText := "BUY NOW"
+    actionColour := color.lime
+else if sellSignal
+    actionText := "SELL NOW"
+    actionColour := color.red
+else if extensionATR > activeExtensionLimitATR
+    actionText := "WAIT — EXTENDED"
+    actionColour := color.orange
+else if bullishBiasReady
+    actionText := bullishPullbackTouch ? "WAIT — CONFIRMATION" : "WAIT FOR PULLBACK"
+    actionColour := color.new(color.lime, 20)
+else if bearishBiasReady
+    actionText := bearishPullbackTouch ? "WAIT — CONFIRMATION" : "WAIT FOR PULLBACK"
+    actionColour := color.new(color.red, 20)
+else if bullScore > bearScore
+    actionText := "WAIT — BULLISH"
+    actionColour := color.new(color.lime, 35)
+else if bearScore > bullScore
+    actionText := "WAIT — BEARISH"
+    actionColour := color.new(color.red, 35)
+
+float leadingScore = math.max(bullScore, bearScore)
+string gradeText = f_grade(leadingScore)
+
+string entryStatus = "No setup"
+color entryStatusColour = color.silver
+
+if planDirection == 1
+    entryStatus := "Long plan active"
+    entryStatusColour := color.lime
+else if planDirection == -1
+    entryStatus := "Short plan active"
+    entryStatusColour := color.red
+else if buySignal
+    entryStatus := "Long confirmed"
+    entryStatusColour := color.lime
+else if sellSignal
+    entryStatus := "Short confirmed"
+    entryStatusColour := color.red
+else if bullishBiasReady
+    entryStatus := bullishPullbackTouch ? "Bull trigger forming" : "Await Fast EMA pullback"
+    entryStatusColour := color.new(color.lime, 20)
+else if bearishBiasReady
+    entryStatus := bearishPullbackTouch ? "Bear trigger forming" : "Await Fast EMA pullback"
+    entryStatusColour := color.new(color.red, 20)
+
+
+//=============================================================================
+// AI ASSISTANT TEXT AND DYNAMIC ENTRY ZONES
+//=============================================================================
+bool bullishZoneAllowed = bullishBiasReady or (not requireBiasForZone and bullScore > bearScore)
+bool bearishZoneAllowed = bearishBiasReady or (not requireBiasForZone and bearScore > bullScore)
+
+// Confluence references used to locate trader-style accumulation/distribution areas.
+float previous4HHigh = request.security(syminfo.tickerid, "240", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+float previous4HLow = request.security(syminfo.tickerid, "240", low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+float previous4HMid = (previous4HHigh + previous4HLow) * 0.5
+float institutionalPsychBelow = math.floor(close / institutionalPsychStep) * institutionalPsychStep
+float institutionalPsychAbove = math.ceil(close / institutionalPsychStep) * institutionalPsychStep
+
+f_nearestBelow(float a, float b, float c, float d, float e, float reference) =>
+    float result = na
+    if not na(a) and a <= reference
+        result := a
+    if not na(b) and b <= reference and (na(result) or b > result)
+        result := b
+    if not na(c) and c <= reference and (na(result) or c > result)
+        result := c
+    if not na(d) and d <= reference and (na(result) or d > result)
+        result := d
+    if not na(e) and e <= reference and (na(result) or e > result)
+        result := e
+    result
+
+f_nearestAbove(float a, float b, float c, float d, float e, float reference) =>
+    float result = na
+    if not na(a) and a >= reference
+        result := a
+    if not na(b) and b >= reference and (na(result) or b < result)
+        result := b
+    if not na(c) and c >= reference and (na(result) or c < result)
+        result := c
+    if not na(d) and d >= reference and (na(result) or d < result)
+        result := d
+    if not na(e) and e >= reference and (na(result) or e < result)
+        result := e
+    result
+
+float rawBuyAnchor = f_nearestBelow(previous4HMid, previous4HLow, structureLow1, ema20, institutionalPsychBelow, close)
+float rawSellAnchor = f_nearestAbove(previous4HMid, previous4HHigh, structureHigh1, ema20, institutionalPsychAbove, close)
+float buyAnchor = na(rawBuyAnchor) ? ema20 : rawBuyAnchor
+float sellAnchor = na(rawSellAnchor) ? ema20 : rawSellAnchor
+
+float institutionalBuyTop = buyAnchor + institutionalEntryInset
+float institutionalBuyBottom = institutionalBuyTop - institutionalZoneWidth
+float institutionalSellBottom = sellAnchor - institutionalEntryInset
+float institutionalSellTop = institutionalSellBottom + institutionalZoneWidth
+
+float buyZoneMid = enableInstitutionalZones ? (institutionalBuyTop + institutionalBuyBottom) * 0.5 : ema20
+float buyZoneTop = enableInstitutionalZones ? institutionalBuyTop : buyZoneMid + atrValue * zoneHalfWidthATR
+float buyZoneBottom = enableInstitutionalZones ? institutionalBuyBottom : buyZoneMid - atrValue * zoneHalfWidthATR
+float sellZoneMid = enableInstitutionalZones ? (institutionalSellTop + institutionalSellBottom) * 0.5 : ema20
+float sellZoneTop = enableInstitutionalZones ? institutionalSellTop : sellZoneMid + atrValue * zoneHalfWidthATR
+float sellZoneBottom = enableInstitutionalZones ? institutionalSellBottom : sellZoneMid - atrValue * zoneHalfWidthATR
+
+f_near(float level, float centre, float tolerance) => not na(level) and math.abs(level - centre) <= tolerance
+float confluenceTolerance = atrValue * confluenceToleranceATR
+int buyConfluence = 0
+buyConfluence += f_near(previous4HMid, buyZoneMid, confluenceTolerance) ? 1 : 0
+buyConfluence += f_near(previous4HLow, buyZoneMid, confluenceTolerance) ? 1 : 0
+buyConfluence += f_near(structureLow1, buyZoneMid, confluenceTolerance) ? 1 : 0
+buyConfluence += f_near(ema20, buyZoneMid, confluenceTolerance) ? 1 : 0
+buyConfluence += f_near(institutionalPsychBelow, buyZoneMid, confluenceTolerance) ? 1 : 0
+int sellConfluence = 0
+sellConfluence += f_near(previous4HMid, sellZoneMid, confluenceTolerance) ? 1 : 0
+sellConfluence += f_near(previous4HHigh, sellZoneMid, confluenceTolerance) ? 1 : 0
+sellConfluence += f_near(structureHigh1, sellZoneMid, confluenceTolerance) ? 1 : 0
+sellConfluence += f_near(ema20, sellZoneMid, confluenceTolerance) ? 1 : 0
+sellConfluence += f_near(institutionalPsychAbove, sellZoneMid, confluenceTolerance) ? 1 : 0
+string buyZoneConfidence = buyConfluence >= 3 ? "HIGH" : buyConfluence == 2 ? "MEDIUM" : "EARLY"
+string sellZoneConfidence = sellConfluence >= 3 ? "HIGH" : sellConfluence == 2 ? "MEDIUM" : "EARLY"
+float buyLayerStep = suggestedLayers > 1 ? institutionalZoneWidth / (suggestedLayers - 1) : 0.0
+float sellLayerStep = suggestedLayers > 1 ? institutionalZoneWidth / (suggestedLayers - 1) : 0.0
+
+string assistantHeadline = actionText
+string assistantReason1 = ""
+string assistantReason2 = ""
+string assistantReason3 = ""
+string missingText = ""
+
+if planDirection == 1
+    assistantHeadline := exitWarningIssued ? "LONG — REVIEW EXIT" : "LONG ACTIVE"
+    assistantReason1 := "Entry " + str.tostring(planEntry, format.mintick)
+    assistantReason2 := "Stop " + str.tostring(planStop, format.mintick)
+    assistantReason3 := "TP3 " + str.tostring(planTP3, format.mintick)
+else if planDirection == -1
+    assistantHeadline := exitWarningIssued ? "SHORT — REVIEW EXIT" : "SHORT ACTIVE"
+    assistantReason1 := "Entry " + str.tostring(planEntry, format.mintick)
+    assistantReason2 := "Stop " + str.tostring(planStop, format.mintick)
+    assistantReason3 := "TP3 " + str.tostring(planTP3, format.mintick)
+else if buySignal
+    assistantHeadline := buyASignal ? "BUY NOW — A" : "BUY NOW — B"
+    assistantReason1 := "Bull score " + str.tostring(bullScore, "#") + "%"
+    assistantReason2 := buyASignal ? "High-confluence pullback" : "Continuation entry"
+    assistantReason3 := executionBull ? "15m aligned" : "15m not opposed"
+else if sellSignal
+    assistantHeadline := sellASignal ? "SELL NOW — A" : "SELL NOW — B"
+    assistantReason1 := "Bear score " + str.tostring(bearScore, "#") + "%"
+    assistantReason2 := sellASignal ? "High-confluence pullback" : "Continuation entry"
+    assistantReason3 := executionBear ? "15m aligned" : "15m not opposed"
+else if bullishBiasReady
+    assistantHeadline := extensionOK ? "WAIT FOR BUY" : "WAIT — EXTENDED"
+    assistantReason1 := executionBull ? "✓ 15m bullish" : "✗ 15m not bullish"
+    assistantReason2 := directionBull ? "✓ 1h bullish" : "• 1h neutral/opposed"
+    assistantReason3 := bullishPullbackTouch ? "✓ In buy zone" : "• Await Fast EMA zone"
+else if bearishBiasReady
+    assistantHeadline := extensionOK ? "WAIT FOR SELL" : "WAIT — EXTENDED"
+    assistantReason1 := executionBear ? "✓ 15m bearish" : "✗ 15m not bearish"
+    assistantReason2 := directionBear ? "✓ 1h bearish" : "• 1h neutral/opposed"
+    assistantReason3 := bearishPullbackTouch ? "✓ In sell zone" : "• Await Fast EMA zone"
+else
+    assistantHeadline := "NO TRADE"
+    assistantReason1 := scoreEdge < minimumScoreEdge ? "✗ Scores too mixed" : "• No strong setup"
+    assistantReason2 := adxValue < minimumADX ? "✗ ADX weak" : "✓ ADX valid"
+    assistantReason3 := sessionOK ? "✓ Session valid" : "✗ Session filtered"
+
+if not sessionOK
+    missingText := "Session"
+else if scoreEdge < minimumScoreEdge
+    missingText := "Clear score edge"
+else if bullishBiasReady and not executionLongOK
+    missingText := "15m bullish alignment"
+else if bearishBiasReady and not executionShortOK
+    missingText := "15m bearish alignment"
+else if bullishBiasReady and not bullishPullbackTouch and not bullishBreakout
+    missingText := "Fast EMA pullback"
+else if bearishBiasReady and not bearishPullbackTouch and not bearishBreakout
+    missingText := "Fast EMA pullback"
+else if extensionATR > activeExtensionLimitATR
+    missingText := "Price to cool off"
+else
+    missingText := "Confirmation candle"
+
+// Live zone boxes
+var box buyZoneBox = na
+var box sellZoneBox = na
+
+if barstate.islast
+    if not na(buyZoneBox)
+        box.delete(buyZoneBox)
+        buyZoneBox := na
+
+    if not na(sellZoneBox)
+        box.delete(sellZoneBox)
+        sellZoneBox := na
+
+    bool priceInsideBuyZone = low <= buyZoneTop and high >= buyZoneBottom
+    bool priceApproachingBuyZone =
+         close > buyZoneTop and
+         close - buyZoneTop <= atrValue * zoneApproachATR
+    bool priceExtendedAboveBuyZone =
+         close > buyZoneTop and
+         extensionATR > bullishExtensionLimitATR
+
+    bool priceInsideSellZone = high >= sellZoneBottom and low <= sellZoneTop
+    bool priceApproachingSellZone =
+         close < sellZoneBottom and
+         sellZoneBottom - close <= atrValue * zoneApproachATR
+    bool priceExtendedBelowSellZone =
+         close < sellZoneBottom and
+         extensionATR > bearishExtensionLimitATR
+
+    color buyZoneFill =
+         not colourZoneByOpportunity ? color.new(color.lime, 88) :
+         priceInsideBuyZone ? color.new(color.lime, 76) :
+         priceApproachingBuyZone ? color.new(color.yellow, 82) :
+         priceExtendedAboveBuyZone ? color.new(color.red, 86) :
+         color.new(color.lime, 90)
+
+    color buyZoneBorder =
+         not colourZoneByOpportunity ? color.new(color.lime, 35) :
+         priceInsideBuyZone ? color.lime :
+         priceApproachingBuyZone ? color.yellow :
+         priceExtendedAboveBuyZone ? color.red :
+         color.new(color.lime, 45)
+
+    string buyZoneText =
+         priceInsideBuyZone ? "BUY ZONE — WATCH" :
+         priceApproachingBuyZone ? "BUY ZONE — APPROACHING" :
+         priceExtendedAboveBuyZone ? "BUY ZONE — DON'T CHASE" :
+         "BUY ZONE · " + buyZoneConfidence + " · " + str.tostring(suggestedLayers) + " LAYERS"
+
+    color sellZoneFill =
+         not colourZoneByOpportunity ? color.new(color.red, 88) :
+         priceInsideSellZone ? color.new(color.red, 76) :
+         priceApproachingSellZone ? color.new(color.yellow, 82) :
+         priceExtendedBelowSellZone ? color.new(color.red, 84) :
+         color.new(color.red, 90)
+
+    color sellZoneBorder =
+         not colourZoneByOpportunity ? color.new(color.red, 35) :
+         priceInsideSellZone ? color.red :
+         priceApproachingSellZone ? color.yellow :
+         priceExtendedBelowSellZone ? color.red :
+         color.new(color.red, 45)
+
+    string sellZoneText =
+         priceInsideSellZone ? "SELL ZONE — WATCH" :
+         priceApproachingSellZone ? "SELL ZONE — APPROACHING" :
+         priceExtendedBelowSellZone ? "SELL ZONE — DON'T CHASE" :
+         "SELL ZONE · " + sellZoneConfidence + " · " + str.tostring(suggestedLayers) + " LAYERS"
+
+    if showEntryZones and bullishZoneAllowed and not planActive
+        buyZoneBox := box.new(
+             left=bar_index,
+             top=buyZoneTop,
+             right=bar_index + zoneProjectionBars,
+             bottom=buyZoneBottom,
+             bgcolor=buyZoneFill,
+             border_color=buyZoneBorder,
+             text=buyZoneText,
+             text_color=buyZoneBorder)
+
+    if showEntryZones and bearishZoneAllowed and not planActive
+        sellZoneBox := box.new(
+             left=bar_index,
+             top=sellZoneTop,
+             right=bar_index + zoneProjectionBars,
+             bottom=sellZoneBottom,
+             bgcolor=sellZoneFill,
+             border_color=sellZoneBorder,
+             text=sellZoneText,
+             text_color=sellZoneBorder)
+
+// Suggested layer guide. First three lines are displayed; additional layers are
+// still represented by the zone and dashboard settings.
+float buyLayer1 = buyZoneTop
+float buyLayer2 = suggestedLayers > 1 ? buyZoneTop - buyLayerStep : na
+float buyLayer3 = suggestedLayers > 2 ? buyZoneTop - buyLayerStep * 2.0 : na
+float sellLayer1 = sellZoneBottom
+float sellLayer2 = suggestedLayers > 1 ? sellZoneBottom + sellLayerStep : na
+float sellLayer3 = suggestedLayers > 2 ? sellZoneBottom + sellLayerStep * 2.0 : na
+
+plot(showLayerLines and showEntryZones and bullishZoneAllowed and not planActive ? buyLayer1 : na, "Buy Layer 1", color=color.new(color.lime, 0), linewidth=2, style=plot.style_linebr)
+plot(showLayerLines and showEntryZones and bullishZoneAllowed and not planActive ? buyLayer2 : na, "Buy Layer 2", color=color.new(color.lime, 35), linewidth=1, style=plot.style_linebr)
+plot(showLayerLines and showEntryZones and bullishZoneAllowed and not planActive ? buyLayer3 : na, "Buy Layer 3", color=color.new(color.lime, 55), linewidth=1, style=plot.style_linebr)
+plot(showLayerLines and showEntryZones and bearishZoneAllowed and not planActive ? sellLayer1 : na, "Sell Layer 1", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(showLayerLines and showEntryZones and bearishZoneAllowed and not planActive ? sellLayer2 : na, "Sell Layer 2", color=color.new(color.red, 35), linewidth=1, style=plot.style_linebr)
+plot(showLayerLines and showEntryZones and bearishZoneAllowed and not planActive ? sellLayer3 : na, "Sell Layer 3", color=color.new(color.red, 55), linewidth=1, style=plot.style_linebr)
+
+//=============================================================================
+// VISUALS
+//=============================================================================
+plot(showFastEMA ? ema20 : na, "Fast EMA", color=color.purple, linewidth=2)
+plot(showMidEMA ? ema50 : na, "Medium EMA", color=color.red, linewidth=2)
+plot(showSlowEMA ? ema200 : na, "Slow EMA", color=color.white, linewidth=2)
+
+plotshape(
+     showSignals and buyASignal,
+     title="GoldEdge A-Grade BUY",
+     style=shape.labelup,
+     location=location.belowbar,
+     color=color.lime,
+     textcolor=color.black,
+     text="BUY A",
+     size=size.small)
+
+plotshape(
+     showSignals and buyBSignal,
+     title="GoldEdge B-Grade BUY",
+     style=shape.labelup,
+     location=location.belowbar,
+     color=color.new(color.lime, 20),
+     textcolor=color.black,
+     text="BUY B",
+     size=size.tiny)
+
+plotshape(
+     showSignals and sellASignal,
+     title="GoldEdge A-Grade SELL",
+     style=shape.labeldown,
+     location=location.abovebar,
+     color=color.red,
+     textcolor=color.white,
+     text="SELL A",
+     size=size.small)
+
+plotshape(
+     showSignals and sellBSignal,
+     title="GoldEdge B-Grade SELL",
+     style=shape.labeldown,
+     location=location.abovebar,
+     color=color.new(color.orange, 5),
+     textcolor=color.black,
+     text="SELL B",
+     size=size.tiny)
+
+plotshape(
+     showExitWarnings and exitWarning and planDirection == 1,
+     title="GoldEdge V7 Long Exit Warning",
+     style=shape.labeldown,
+     location=location.abovebar,
+     color=color.orange,
+     textcolor=color.black,
+     text="LONG EXIT WARNING",
+     size=size.small)
+
+plotshape(
+     showExitWarnings and exitWarning and planDirection == -1,
+     title="GoldEdge V7 Short Exit Warning",
+     style=shape.labelup,
+     location=location.belowbar,
+     color=color.orange,
+     textcolor=color.black,
+     text="SHORT EXIT WARNING",
+     size=size.small)
+
+plot(showTradePlan and planActive ? planEntry : na, "Plan Entry", color=color.yellow, linewidth=2, style=plot.style_linebr)
+plot(showTradePlan and planActive ? planStop : na, "Plan Stop", color=color.red, linewidth=2, style=plot.style_linebr)
+plot(showTradePlan and planActive ? planTP1 : na, "Plan TP1", color=color.new(color.lime, 35), linewidth=1, style=plot.style_linebr)
+plot(showTradePlan and planActive ? planTP2 : na, "Plan TP2", color=color.new(color.lime, 15), linewidth=1, style=plot.style_linebr)
+plot(showTradePlan and planActive ? planTP3 : na, "Plan TP3", color=color.lime, linewidth=2, style=plot.style_linebr)
+
+// Make a brand-new plan visible immediately. The normal plots grow one bar at a
+// time; these short forward extensions give the first Entry/SL/TP marks a
+// configurable minimum length and then naturally get overtaken by the plots.
+var line liveEntryExtension = na
+var line liveStopExtension = na
+var line liveTP1Extension = na
+var line liveTP2Extension = na
+var line liveTP3Extension = na
+if barstate.islast
+    line.delete(liveEntryExtension)
+    line.delete(liveStopExtension)
+    line.delete(liveTP1Extension)
+    line.delete(liveTP2Extension)
+    line.delete(liveTP3Extension)
+    if showTradePlan and planActive and not na(planStartBar)
+        int liveLineEnd = math.max(bar_index, planStartBar + initialPlanLineBars)
+        liveEntryExtension := line.new(planStartBar, planEntry, liveLineEnd, planEntry, xloc=xloc.bar_index, color=color.yellow, width=2)
+        liveStopExtension := line.new(planStartBar, planStop, liveLineEnd, planStop, xloc=xloc.bar_index, color=color.red, width=2)
+        liveTP1Extension := line.new(planStartBar, planTP1, liveLineEnd, planTP1, xloc=xloc.bar_index, color=color.new(color.lime, 35), width=1)
+        liveTP2Extension := line.new(planStartBar, planTP2, liveLineEnd, planTP2, xloc=xloc.bar_index, color=color.new(color.lime, 15), width=1)
+        liveTP3Extension := line.new(planStartBar, planTP3, liveLineEnd, planTP3, xloc=xloc.bar_index, color=color.lime, width=2)
+
+barcolor(colourBars ? actionColour : na)
+
+//=============================================================================
+// TRADE REVIEW DISPLAY VALUES
+//=============================================================================
+bool reviewMode = dashboardTradeMode == "Review historical trade"
+int historyCount = array.size(histDirection)
+bool reviewAvailable = reviewMode and historyCount > 0
+int reviewIndex = reviewAvailable ? math.min(selectedTradeNumber, historyCount - 1) : 0
+int reviewDirection = reviewAvailable ? array.get(histDirection, reviewIndex) : 0
+int reviewStartBar = reviewAvailable ? array.get(histStartBar, reviewIndex) : na
+float reviewEntry = reviewAvailable ? array.get(histEntry, reviewIndex) : na
+float reviewStop = reviewAvailable ? array.get(histStop, reviewIndex) : na
+float reviewTP1 = reviewAvailable ? array.get(histTP1, reviewIndex) : na
+float reviewTP2 = reviewAvailable ? array.get(histTP2, reviewIndex) : na
+float reviewTP3 = reviewAvailable ? array.get(histTP3, reviewIndex) : na
+string reviewGrade = reviewAvailable ? array.get(histGrade, reviewIndex) : "—"
+float reviewBull = reviewAvailable ? array.get(histBullScore, reviewIndex) : na
+float reviewBear = reviewAvailable ? array.get(histBearScore, reviewIndex) : na
+float reviewADX = reviewAvailable ? array.get(histADX, reviewIndex) : na
+float reviewRSI = reviewAvailable ? array.get(histRSI, reviewIndex) : na
+string reviewStatus = reviewAvailable ? array.get(histStatus, reviewIndex) : "No stored trade"
+string reviewExitReason = reviewAvailable ? array.get(histExitReason, reviewIndex) : "—"
+int reviewBars = reviewAvailable ? array.get(histBars, reviewIndex) : 0
+bool reviewTP1Hit = reviewAvailable ? array.get(histTP1Hit, reviewIndex) : false
+bool reviewTP2Hit = reviewAvailable ? array.get(histTP2Hit, reviewIndex) : false
+bool reviewTP3Hit = reviewAvailable ? array.get(histTP3Hit, reviewIndex) : false
+bool reviewStopHit = reviewAvailable ? array.get(histStopHit, reviewIndex) : false
+float reviewMaxFavourable = reviewAvailable ? array.get(histMaxFavourable, reviewIndex) : na
+float reviewBeyondTP3 = reviewAvailable ? array.get(histBeyondTP3, reviewIndex) : na
+int reviewWindowBars = reviewAvailable ? math.min(math.max(bar_index - reviewStartBar, 0), planExpiryBars) : 0
+
+// Chart-based trade tally across retained history.
+// TP1 or better = winner. A stop is counted as a loss only when TP1 was never reached.
+int tallyTPWins = 0
+int tallyStopLosses = 0
+int tallyManagedOrOpen = 0
+int tallyTP2Plus = 0
+int tallyTP3Wins = 0
+
+// Direction split across the same retained last-50 history.
+// TP1 or better = winner. SL counts only when TP1 was not reached.
+int tallyBuyTrades = 0
+int tallyBuyWins = 0
+int tallyBuyStops = 0
+int tallySellTrades = 0
+int tallySellWins = 0
+int tallySellStops = 0
+
+int tallyATrades = 0
+int tallyAWins = 0
+int tallyAStops = 0
+int tallyATP3 = 0
+int tallyABeyondCount = 0
+float tallyABeyondTotal = 0.0
+
+int tallyBTrades = 0
+int tallyBWins = 0
+int tallyBStops = 0
+int tallyBTP3 = 0
+int tallyBBeyondCount = 0
+float tallyBBeyondTotal = 0.0
+
+float tallyLargestBeyond = 0.0
+int tallyLargestBeyondTrade = na
+
+if historyCount > 0
+    for i = 0 to historyCount - 1
+        int tDirection = array.get(histDirection, i)
+        bool tTP1 = array.get(histTP1Hit, i)
+        bool tTP2 = array.get(histTP2Hit, i)
+        bool tTP3 = array.get(histTP3Hit, i)
+        bool tStop = array.get(histStopHit, i)
+        string tGrade = array.get(histGrade, i)
+        float tBeyond = array.get(histBeyondTP3, i)
+        bool tWinner = tTP1 or tTP2 or tTP3
+        bool tStopLoss = tStop and not tWinner
+
+        if tWinner
+            tallyTPWins += 1
+            tallyTP2Plus += tTP2 or tTP3 ? 1 : 0
+            tallyTP3Wins += tTP3 ? 1 : 0
+        else if tStop
+            tallyStopLosses += 1
+        else
+            tallyManagedOrOpen += 1
+
+        if tDirection == 1
+            tallyBuyTrades += 1
+            tallyBuyWins += tWinner ? 1 : 0
+            tallyBuyStops += tStopLoss ? 1 : 0
+        else if tDirection == -1
+            tallySellTrades += 1
+            tallySellWins += tWinner ? 1 : 0
+            tallySellStops += tStopLoss ? 1 : 0
+
+        if tGrade == "A"
+            tallyATrades += 1
+            tallyAWins += tWinner ? 1 : 0
+            tallyAStops += tStopLoss ? 1 : 0
+            tallyATP3 += tTP3 ? 1 : 0
+            if tTP3 and tBeyond > 0
+                tallyABeyondCount += 1
+                tallyABeyondTotal += tBeyond
+        else if tGrade == "B"
+            tallyBTrades += 1
+            tallyBWins += tWinner ? 1 : 0
+            tallyBStops += tStopLoss ? 1 : 0
+            tallyBTP3 += tTP3 ? 1 : 0
+            if tTP3 and tBeyond > 0
+                tallyBBeyondCount += 1
+                tallyBBeyondTotal += tBeyond
+
+        if tBeyond > tallyLargestBeyond
+            tallyLargestBeyond := tBeyond
+            tallyLargestBeyondTrade := i
+
+int tallyResolved = tallyTPWins + tallyStopLosses
+float tallyWinRate = tallyResolved > 0 ? 100.0 * tallyTPWins / tallyResolved : na
+int tallyBuyResolved = tallyBuyWins + tallyBuyStops
+int tallySellResolved = tallySellWins + tallySellStops
+float tallyBuyWinRate = tallyBuyResolved > 0 ? 100.0 * tallyBuyWins / tallyBuyResolved : na
+float tallySellWinRate = tallySellResolved > 0 ? 100.0 * tallySellWins / tallySellResolved : na
+float tallyAWinRate = tallyAWins + tallyAStops > 0 ? 100.0 * tallyAWins / (tallyAWins + tallyAStops) : na
+float tallyBWinRate = tallyBWins + tallyBStops > 0 ? 100.0 * tallyBWins / (tallyBWins + tallyBStops) : na
+float tallyAAvgBeyond = tallyABeyondCount > 0 ? tallyABeyondTotal / tallyABeyondCount : 0.0
+float tallyBAvgBeyond = tallyBBeyondCount > 0 ? tallyBBeyondTotal / tallyBBeyondCount : 0.0
+
+var label reviewMarker = na
+var line reviewEntryLine = na
+var line reviewStopLine = na
+var line reviewTP1Line = na
+var line reviewTP2Line = na
+var line reviewTP3Line = na
+if barstate.islast
+    label.delete(reviewMarker)
+    line.delete(reviewEntryLine)
+    line.delete(reviewStopLine)
+    line.delete(reviewTP1Line)
+    line.delete(reviewTP2Line)
+    line.delete(reviewTP3Line)
+    if highlightReviewedTrade and reviewAvailable
+        color rc = reviewDirection == 1 ? color.lime : color.red
+        int lineEnd = math.min(reviewStartBar + planExpiryBars, bar_index)
+        reviewMarker := label.new(reviewStartBar, reviewEntry, "REVIEW #" + str.tostring(reviewIndex) + " · " + (reviewDirection == 1 ? "BUY " : "SELL ") + reviewGrade, xloc=xloc.bar_index, style=reviewDirection == 1 ? label.style_label_up : label.style_label_down, color=rc, textcolor=color.black, size=size.small)
+        reviewEntryLine := line.new(reviewStartBar, reviewEntry, lineEnd, reviewEntry, xloc=xloc.bar_index, color=color.yellow, width=2)
+        reviewStopLine := line.new(reviewStartBar, reviewStop, lineEnd, reviewStop, xloc=xloc.bar_index, color=color.red, width=2)
+        reviewTP1Line := line.new(reviewStartBar, reviewTP1, lineEnd, reviewTP1, xloc=xloc.bar_index, color=color.new(color.lime, 35))
+        reviewTP2Line := line.new(reviewStartBar, reviewTP2, lineEnd, reviewTP2, xloc=xloc.bar_index, color=color.new(color.lime, 15))
+        reviewTP3Line := line.new(reviewStartBar, reviewTP3, lineEnd, reviewTP3, xloc=xloc.bar_index, color=color.lime, width=2)
+
+// Optional chart-wide report: one compact label per retained trade.
+// This shows the A/B split, stop losses and the exact move beyond TP3 without
+// requiring the historical-trade selector to be changed 50 times.
+var array<label> allTradeAnalysisLabels = array.new_label()
+if barstate.islast
+    if array.size(allTradeAnalysisLabels) > 0
+        for i = 0 to array.size(allTradeAnalysisLabels) - 1
+            label.delete(array.get(allTradeAnalysisLabels, i))
+        array.clear(allTradeAnalysisLabels)
+
+    if showAllTradeAnalysisLabels and historyCount > 0
+        for i = 0 to historyCount - 1
+            int tDirection = array.get(histDirection, i)
+            int tStart = array.get(histStartBar, i)
+            float tEntry = array.get(histEntry, i)
+            string tGrade = array.get(histGrade, i)
+            bool tTP1 = array.get(histTP1Hit, i)
+            bool tTP2 = array.get(histTP2Hit, i)
+            bool tTP3 = array.get(histTP3Hit, i)
+            bool tStop = array.get(histStopHit, i)
+            float tMFE = array.get(histMaxFavourable, i)
+            float tBeyond = array.get(histBeyondTP3, i)
+            bool tWinner = tTP1 or tTP2 or tTP3
+            string tResult = tTP3 ? "TP3 +" + str.tostring(tBeyond, "#.00") : tTP2 ? "TP2" : tTP1 ? "TP1" : tStop ? "SL" : "OPEN/MANAGED"
+            string tText = "#" + str.tostring(i) + " " + tGrade + " " + (tDirection == 1 ? "BUY" : "SELL") + "\n" + tResult + " · MFE " + str.tostring(tMFE, "#.00")
+            color tColour = not tWinner and tStop ? color.red : tGrade == "A" ? color.yellow : color.aqua
+            label tLabel = label.new(tStart, tEntry, tText, xloc=xloc.bar_index, style=tDirection == 1 ? label.style_label_up : label.style_label_down, color=tColour, textcolor=color.black, size=size.tiny)
+            array.push(allTradeAnalysisLabels, tLabel)
+
+//=============================================================================
+// AI DASHBOARD
+//=============================================================================
+var table dashboard = table.new(
+     position.top_right,
+     4,
+     14,
+     frame_color=color.gray,
+     frame_width=1,
+     border_color=color.gray,
+     border_width=1)
+
+if barstate.islast
+    if showDashboard
+        table.clear(dashboard, 0, 0, 3, 13)
+
+        if reviewMode
+            color rc = reviewDirection == 1 ? color.lime : reviewDirection == -1 ? color.red : color.silver
+            float lead = reviewAvailable ? math.max(reviewBull, reviewBear) : 0.0
+            // A trade is counted as a winner as soon as TP1 is reached.
+            // A later stop cannot turn an already-profitable trade into a loss.
+            // Display the highest target reached before showing a stop-only loss.
+            bool reviewWinner = reviewTP1Hit or reviewTP2Hit or reviewTP3Hit
+            string result = not reviewAvailable ? "No stored trade" : reviewTP3Hit ? "WIN · TP3 HIT" : reviewTP2Hit ? "WIN · TP2 HIT" : reviewTP1Hit ? "WIN · TP1 HIT" : reviewStopHit ? "LOSS · STOP HIT" : reviewStatus
+            string progress = not reviewAvailable ? "—" : (reviewTP1Hit ? "TP1 ✓" : "TP1 —") + "  " + (reviewTP2Hit ? "TP2 ✓" : "TP2 —") + "  " + (reviewTP3Hit ? "TP3 ✓" : "TP3 —")
+            table.cell(dashboard, 0, 0, "Trade Review", bgcolor=color.rgb(25,25,25), text_color=color.white)
+            table.cell(dashboard, 1, 0, reviewAvailable ? "#" + str.tostring(reviewIndex) + " " + (reviewDirection == 1 ? "BUY" : "SELL") : "NO HISTORY", bgcolor=color.rgb(25,25,25), text_color=rc)
+            table.cell(dashboard, 2, 0, "Grade " + reviewGrade, bgcolor=color.rgb(25,25,25), text_color=f_scoreColour(lead))
+            table.cell(dashboard, 3, 0, reviewAvailable ? str.tostring(lead,"#") + "%" : "—", bgcolor=color.rgb(25,25,25), text_color=f_scoreColour(lead))
+            table.cell(dashboard, 0, 1, "Signal bias")
+            table.cell(dashboard, 1, 1, reviewDirection == 1 ? "Bullish" : reviewDirection == -1 ? "Bearish" : "—", text_color=rc)
+            table.cell(dashboard, 2, 1, reviewAvailable ? "Bull " + str.tostring(reviewBull,"#") + "%" : "—")
+            table.cell(dashboard, 3, 1, reviewAvailable ? "Bear " + str.tostring(reviewBear,"#") + "%" : "—")
+            table.cell(dashboard, 0, 2, "At entry")
+            table.cell(dashboard, 1, 2, reviewAvailable ? "ADX " + str.tostring(reviewADX,"#.0") : "—")
+            table.cell(dashboard, 2, 2, reviewAvailable ? "RSI " + str.tostring(reviewRSI,"#.0") : "—")
+            table.cell(dashboard, 3, 2, reviewAvailable ? str.tostring(reviewBars) + " bars" : "—")
+            table.cell(dashboard, 0, 3, "Outcome")
+            table.cell(dashboard, 1, 3, result, text_color=reviewWinner ? color.lime : reviewStopHit ? color.red : color.orange)
+            table.cell(dashboard, 2, 3, reviewExitReason == "None" ? "No exit warning" : reviewExitReason)
+            table.cell(dashboard, 3, 3, str.tostring(historyCount) + " stored")
+            table.cell(dashboard, 0, 4, "Progress")
+            table.cell(dashboard, 1, 4, progress)
+            table.cell(dashboard, 2, 4, reviewStopHit ? "SL ✓" : "SL —", text_color=reviewStopHit ? color.red : color.silver)
+            table.cell(dashboard, 3, 4, "Select in settings")
+            table.cell(dashboard, 0, 5, "Selection")
+            table.cell(dashboard, 1, 5, reviewAvailable ? "Trade #" + str.tostring(reviewIndex) : "—")
+            table.cell(dashboard, 2, 5, reviewAvailable ? (reviewDirection == 1 ? "BUY" : "SELL") : "—", text_color=rc)
+            table.cell(dashboard, 3, 5, "#0 = latest")
+            table.cell(dashboard, 0, 6, "Trade")
+            table.cell(dashboard, 1, 6, result, text_color=reviewWinner ? color.lime : reviewStopHit ? color.red : rc)
+            table.cell(dashboard, 2, 6, reviewAvailable ? "Entry " + str.tostring(reviewEntry,format.mintick) : "—")
+            table.cell(dashboard, 3, 6, reviewAvailable ? "SL " + str.tostring(reviewStop,format.mintick) : "—", text_color=color.red)
+            table.cell(dashboard, 0, 7, "Gold targets")
+            table.cell(dashboard, 1, 7, reviewAvailable ? "TP1 " + str.tostring(reviewTP1,format.mintick) : "—", text_color=reviewTP1Hit ? color.lime : color.silver)
+            table.cell(dashboard, 2, 7, reviewAvailable ? "TP2 " + str.tostring(reviewTP2,format.mintick) : "—", text_color=reviewTP2Hit ? color.lime : color.silver)
+            table.cell(dashboard, 3, 7, reviewAvailable ? "TP3 " + str.tostring(reviewTP3,format.mintick) : "—", text_color=reviewTP3Hit ? color.lime : color.silver)
+            table.cell(dashboard, 0, 8, "Result")
+            table.cell(dashboard, 1, 8, result, text_color=reviewWinner ? color.lime : reviewStopHit ? color.red : color.orange)
+            table.cell(dashboard, 2, 8, reviewAvailable ? "Trade " + str.tostring(reviewIndex+1) + " of " + str.tostring(historyCount) : "—")
+            table.cell(dashboard, 3, 8, reviewAvailable ? str.tostring(reviewBars) + " bars" : "—")
+            table.cell(dashboard, 0, 9, "Overall")
+            table.cell(dashboard, 1, 9, "Wins " + str.tostring(tallyTPWins), text_color=color.lime)
+            table.cell(dashboard, 2, 9, "SL " + str.tostring(tallyStopLosses), text_color=tallyStopLosses > 0 ? color.red : color.silver)
+            table.cell(dashboard, 3, 9, tallyResolved > 0 ? "Win " + str.tostring(tallyWinRate, "#.0") + "%" : "No resolved")
+
+            table.cell(dashboard, 0, 10, "BUY trades")
+            table.cell(dashboard, 1, 10, str.tostring(tallyBuyTrades) + " total · " + str.tostring(tallyBuyWins) + " wins", text_color=color.lime)
+            table.cell(dashboard, 2, 10, "SL " + str.tostring(tallyBuyStops), text_color=tallyBuyStops > 0 ? color.red : color.silver)
+            table.cell(dashboard, 3, 10, tallyBuyResolved > 0 ? "Win " + str.tostring(tallyBuyWinRate, "#.0") + "%" : "No resolved buys")
+
+            table.cell(dashboard, 0, 11, "SELL trades")
+            table.cell(dashboard, 1, 11, str.tostring(tallySellTrades) + " total · " + str.tostring(tallySellWins) + " wins", text_color=color.lime)
+            table.cell(dashboard, 2, 11, "SL " + str.tostring(tallySellStops), text_color=tallySellStops > 0 ? color.red : color.silver)
+            table.cell(dashboard, 3, 11, tallySellResolved > 0 ? "Win " + str.tostring(tallySellWinRate, "#.0") + "%" : "No resolved sells")
+
+            table.cell(dashboard, 0, 12, "Selected MFE")
+            table.cell(dashboard, 1, 12, reviewAvailable ? "Max move " + str.tostring(reviewMaxFavourable, "#.00") : "—", text_color=color.lime)
+            table.cell(dashboard, 2, 12, reviewAvailable and reviewTP3Hit ? "Beyond TP3 +" + str.tostring(reviewBeyondTP3, "#.00") : "TP3 not reached")
+            table.cell(dashboard, 3, 12, reviewAvailable ? str.tostring(reviewWindowBars) + "/" + str.tostring(planExpiryBars) + " bars" : "—")
+
+            table.cell(dashboard, 0, 13, "Beyond TP3")
+            table.cell(dashboard, 1, 13, "A " + str.tostring(tallyABeyondCount) + " · B " + str.tostring(tallyBBeyondCount))
+            table.cell(dashboard, 2, 13, na(tallyLargestBeyondTrade) ? "None" : "Largest +" + str.tostring(tallyLargestBeyond, "#.00"))
+            table.cell(dashboard, 3, 13, na(tallyLargestBeyondTrade) ? "V8.0" : "Trade #" + str.tostring(tallyLargestBeyondTrade))
+        else
+            table.cell(dashboard, 0, 0, "GoldEdge AI", bgcolor=color.rgb(25, 25, 25), text_color=color.white)
+            table.cell(dashboard, 1, 0, assistantHeadline, bgcolor=color.rgb(25, 25, 25), text_color=actionColour)
+            table.cell(dashboard, 2, 0, "Grade " + gradeText, bgcolor=color.rgb(25, 25, 25), text_color=f_scoreColour(leadingScore))
+            table.cell(dashboard, 3, 0, str.tostring(leadingScore, "#") + "%", bgcolor=color.rgb(25, 25, 25), text_color=f_scoreColour(leadingScore))
+
+            table.cell(dashboard, 0, 1, "Bias")
+            table.cell(dashboard, 1, 1, bullScore > bearScore ? "Bullish" : bearScore > bullScore ? "Bearish" : "Mixed",
+                 text_color=bullScore > bearScore ? color.lime : bearScore > bullScore ? color.red : color.orange)
+            table.cell(dashboard, 2, 1, "Bull " + str.tostring(bullScore, "#") + "%")
+            table.cell(dashboard, 3, 1, "Bear " + str.tostring(bearScore, "#") + "%")
+
+            if showMTFRibbon
+                table.cell(dashboard, 0, 2, "MTF")
+                table.cell(dashboard, 1, 2, "5m " + f_stateText(localBull, localBear), text_color=f_stateColour(localBull, localBear))
+                table.cell(dashboard, 2, 2, "15m " + f_stateText(executionBull, executionBear), text_color=f_stateColour(executionBull, executionBear))
+                table.cell(dashboard, 3, 2, "1h " + f_stateText(directionBull, directionBear), text_color=f_stateColour(directionBull, directionBear))
+            else
+                table.cell(dashboard, 0, 2, "Trend")
+                table.cell(dashboard, 1, 2, f_stateText(localBull, localBear), text_color=f_stateColour(localBull, localBear))
+                table.cell(dashboard, 2, 2, "ADX " + str.tostring(adxValue, "#.0"))
+                table.cell(dashboard, 3, 2, "RSI " + str.tostring(rsiValue, "#.0"))
+
+            table.cell(dashboard, 0, 3, "Reason")
+            table.cell(dashboard, 1, 3, assistantReason1)
+            table.cell(dashboard, 2, 3, assistantReason2)
+            table.cell(dashboard, 3, 3, assistantReason3)
+
+            table.cell(dashboard, 0, 4, "Missing")
+            table.cell(dashboard, 1, 4, missingText, text_color=color.orange)
+            table.cell(dashboard, 2, 4, "Edge " + str.tostring(scoreEdge, "#") + " · Ext " + str.tostring(extensionATR, "#.00") + "/" + str.tostring(activeExtensionLimitATR, "#.00"))
+            table.cell(dashboard, 3, 4, sessionText, text_color=sessionColour)
+
+            table.cell(dashboard, 0, 5, "Next zone")
+            table.cell(dashboard, 1, 5,
+                 bullishZoneAllowed ? str.tostring(buyZoneBottom, format.mintick) + "–" + str.tostring(buyZoneTop, format.mintick) :
+                 bearishZoneAllowed ? str.tostring(sellZoneBottom, format.mintick) + "–" + str.tostring(sellZoneTop, format.mintick) : "—")
+            table.cell(dashboard, 2, 5, bullishZoneAllowed ? "BUY" : bearishZoneAllowed ? "SELL" : "NONE",
+                 text_color=bullishZoneAllowed ? color.lime : bearishZoneAllowed ? color.red : color.silver)
+            table.cell(dashboard, 3, 5, str.tostring(extensionATR, "#.00") + " ATR")
+
+            table.cell(dashboard, 0, 6, "Trade")
+            table.cell(dashboard, 1, 6, planActive ? planStatus + " · " + planSetupGrade : planStatus, text_color=planDirection == 1 ? color.lime : planDirection == -1 ? color.red : color.silver)
+            table.cell(dashboard, 2, 6, planActive ? "Entry " + str.tostring(planEntry, format.mintick) : "—")
+            table.cell(dashboard, 3, 6, planActive ? "SL " + str.tostring(planStop, format.mintick) : "—", text_color=planActive ? color.red : color.silver)
+
+            table.cell(dashboard, 0, 7, "Gold targets")
+            table.cell(dashboard, 1, 7, planActive ? "TP1 " + str.tostring(planTP1, format.mintick) : "—")
+            table.cell(dashboard, 2, 7, planActive ? "TP2 " + str.tostring(planTP2, format.mintick) : "—")
+            table.cell(dashboard, 3, 7, planActive ? "TP3 " + str.tostring(planTP3, format.mintick) : "—", text_color=planActive ? color.lime : color.silver)
+
+            table.cell(dashboard, 0, 8, "Exit")
+            table.cell(dashboard, 1, 8, exitWarningIssued ? "WARNING" : "Clear", text_color=exitWarningIssued ? color.orange : color.lime)
+            table.cell(dashboard, 2, 8, exitWarningIssued ? exitWarningReason : "No warning")
+            table.cell(dashboard, 3, 8, planActive ? str.tostring(planAge) + " bars" : "")
+
+            table.cell(dashboard, 0, 9, "Momentum")
+            table.cell(dashboard, 1, 9, "ADX " + str.tostring(adxValue, "#.0"), text_color=adxValue >= minimumADX ? color.lime : color.orange)
+            table.cell(dashboard, 2, 9, "RSI " + str.tostring(rsiValue, "#.0"))
+            table.cell(dashboard, 3, 9, emaGapATR >= minimumGapATR ? "Trend valid" : "Compressed",
+                 text_color=emaGapATR >= minimumGapATR ? color.lime : color.orange)
+
+            table.cell(dashboard, 0, 10, "Zone strength")
+            table.cell(dashboard, 1, 10, bullishZoneAllowed ? "BUY " + buyZoneConfidence : bearishZoneAllowed ? "SELL " + sellZoneConfidence : "NONE", text_color=bullishZoneAllowed ? color.lime : bearishZoneAllowed ? color.red : color.silver)
+            table.cell(dashboard, 2, 10, bullishZoneAllowed ? str.tostring(buyConfluence) + "/5" : bearishZoneAllowed ? str.tostring(sellConfluence) + "/5" : "—")
+            table.cell(dashboard, 3, 10, enableInstitutionalZones ? "Institutional" : "EMA zone")
+
+            table.cell(dashboard, 0, 11, "Suggested layers")
+            table.cell(dashboard, 1, 11, bullishZoneAllowed ? str.tostring(buyLayer1, format.mintick) : bearishZoneAllowed ? str.tostring(sellLayer1, format.mintick) : "—")
+            table.cell(dashboard, 2, 11, bullishZoneAllowed and suggestedLayers > 1 ? str.tostring(buyLayer2, format.mintick) : bearishZoneAllowed and suggestedLayers > 1 ? str.tostring(sellLayer2, format.mintick) : "—")
+            table.cell(dashboard, 3, 11, bullishZoneAllowed and suggestedLayers > 2 ? str.tostring(buyLayer3, format.mintick) : bearishZoneAllowed and suggestedLayers > 2 ? str.tostring(sellLayer3, format.mintick) : "—")
+    else
+        table.clear(dashboard, 0, 0, 3, 13)
+
+//=============================================================================
+// ALERTS
+//=============================================================================
+
+//=============================================================================
+// MT5 AUTOMATION BRIDGE
+// Sends the exact V8.1 trade plan after V8.1 has already created entry/SL/TPs.
+// Create TradingView alert using: "Any alert() function call".
+//=============================================================================
+f_auto_num(float x) =>
+    str.tostring(x, format.mintick)
+
+f_auto_json(string side, string grade, float entry, float sl, float tp1, float tp2, float tp3) =>
+    string sid = syminfo.ticker + "-" + side + "-" + grade + "-" + str.tostring(time) + "-" + str.tostring(bar_index)
+    string msg = "{\"key\":\"" + automationKey + "\""
+    msg += ",\"id\":\"" + sid + "\""
+    msg += ",\"source\":\"GoldEdgeV8.1\""
+    msg += ",\"symbol\":\"" + automationSymbol + "\""
+    msg += ",\"tv_symbol\":\"" + syminfo.ticker + "\""
+    msg += ",\"side\":\"" + side + "\""
+    msg += ",\"grade\":\"" + grade + "\""
+    msg += ",\"entry\":" + f_auto_num(entry)
+    msg += ",\"sl\":" + f_auto_num(sl)
+    msg += ",\"tp1\":" + f_auto_num(tp1)
+    msg += ",\"tp2\":" + f_auto_num(tp2)
+    msg += ",\"tp3\":" + f_auto_num(tp3)
+    msg += ",\"risk_pct\":" + str.tostring(automationRiskPct, "#.##")
+    msg += ",\"ttl_sec\":" + str.tostring(automationTTLSeconds)
+    msg += ",\"created_ms\":" + str.tostring(timenow)
+    msg += "}"
+    msg
+
+bool automationPlanReady =
+     not na(planEntry) and
+     not na(planStop) and
+     not na(planTP1) and
+     not na(planTP2) and
+     not na(planTP3)
+
+string automationGrade = str.contains(str.upper(planSetupGrade), "B") ? "B" : "A"
+bool automationGradeAllowed = automationGrade == "A" ? automateAGrade : automateBGrade
+
+if enableMT5Automation and automationPlanReady and automationGradeAllowed
+    if buySignal
+        alert(f_auto_json("BUY", automationGrade, planEntry, planStop, planTP1, planTP2, planTP3), alert.freq_once_per_bar_close)
+    if sellSignal
+        alert(f_auto_json("SELL", automationGrade, planEntry, planStop, planTP1, planTP2, planTP3), alert.freq_once_per_bar_close)
+
+alertcondition(
+     buyASignal,
+     title="GoldEdge A-Grade BUY",
+     message="GoldEdge A-grade BUY setup confirmed on {{ticker}} at {{close}}")
+
+alertcondition(
+     buyBSignal,
+     title="GoldEdge B-Grade BUY",
+     message="GoldEdge B-grade BUY continuation setup confirmed on {{ticker}} at {{close}}")
+
+alertcondition(
+     sellASignal,
+     title="GoldEdge A-Grade SELL",
+     message="GoldEdge A-grade SELL setup confirmed on {{ticker}} at {{close}}")
+
+alertcondition(
+     sellBSignal,
+     title="GoldEdge B-Grade SELL",
+     message="GoldEdge B-grade SELL continuation setup confirmed on {{ticker}} at {{close}}")
+
+alertcondition(
+     buySignal,
+     title="GoldEdge V8 BUY NOW",
+     message="GoldEdge V7 confirmed BUY NOW signal.")
+
+alertcondition(
+     sellSignal,
+     title="GoldEdge V8 SELL NOW",
+     message="GoldEdge V7 confirmed SELL NOW signal.")
+
+alertcondition(
+     bullishBiasReady and not bullishBiasReady[1],
+     title="GoldEdge V7 Bullish Setup",
+     message="GoldEdge V7 bullish setup is ready; wait for an entry trigger.")
+
+alertcondition(
+     bearishBiasReady and not bearishBiasReady[1],
+     title="GoldEdge V7 Bearish Setup",
+     message="GoldEdge V7 bearish setup is ready; wait for an entry trigger.")
+
+
+alertcondition(longStopHit or shortStopHit, title="GoldEdge V7 Stop Hit", message="GoldEdge V7 trade plan stop was hit.")
+alertcondition(longTP3Hit or shortTP3Hit, title="GoldEdge V7 TP3 Hit", message="GoldEdge V7 trade plan reached TP3.")
+alertcondition(planExpired, title="GoldEdge V7 Plan Expired", message="GoldEdge V7 trade plan expired.")
+
+
+alertcondition(
+     exitWarning,
+     title="GoldEdge V7 EXIT WARNING",
+     message="GoldEdge V7 active trade is weakening. Review the position.")
+
+
+plot(structureHigh1, "Structure High 1", display=display.data_window)
+plot(structureHigh2, "Structure High 2", display=display.data_window)
+plot(structureLow1, "Structure Low 1", display=display.data_window)
+plot(structureLow2, "Structure Low 2", display=display.data_window)
+
+// DATA WINDOW
+plot(bullScore, "Bull Score", display=display.data_window)
+plot(bearScore, "Bear Score", display=display.data_window)
+plot(scoreEdge, "Score Edge", display=display.data_window)
+plot(adxValue, "ADX", display=display.data_window)
+plot(rsiValue, "RSI", display=display.data_window)
+
+
+//=============================================================================
+// PSYCHOLOGICAL LEVEL MAP
+// Draws nearby $25 levels, highlighting $50 and $100 levels more strongly.
+// Informational only: it does not alter entries, exits, scores or trade review.
+//=============================================================================
+var line[] psychLines = array.new_line()
+var label[] psychLabels = array.new_label()
+
+f_isMultiple(float level, float step) =>
+    math.abs(level / step - math.round(level / step)) < 0.0001
+
+if barstate.islast
+    while array.size(psychLines) > 0
+        line.delete(array.pop(psychLines))
+    while array.size(psychLabels) > 0
+        label.delete(array.pop(psychLabels))
+
+    if showPsychLevels
+        float psychStep = showQuarterLevels ? 25.0 : 50.0
+        float psychBase = math.floor(close / psychStep) * psychStep
+        int firstOffset = -psychLevelsEachSide
+        int lastOffset = psychLevelsEachSide + 1
+
+        for offset = firstOffset to lastOffset
+            float level = psychBase + offset * psychStep
+            bool major100 = f_isMultiple(level, 100.0)
+            bool major50 = not major100 and f_isMultiple(level, 50.0)
+            color levelColour = major100 ? color.new(color.red, 10) : major50 ? color.new(color.orange, 20) : color.new(color.yellow, 45)
+            int levelWidth = major100 ? 3 : major50 ? 2 : 1
+            line ln = line.new(bar_index - psychLineLookback, level, bar_index + 20, level, xloc=xloc.bar_index, extend=extend.none, color=levelColour, width=levelWidth, style=line.style_dashed)
+            array.push(psychLines, ln)
+
+            if showPsychLabels
+                string levelType = major100 ? " $100" : major50 ? " $50" : " $25"
+                label lb = label.new(bar_index + 21, level, str.tostring(level, format.mintick) + levelType, xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.black, 30), textcolor=levelColour, size=size.tiny)
+                array.push(psychLabels, lb)
