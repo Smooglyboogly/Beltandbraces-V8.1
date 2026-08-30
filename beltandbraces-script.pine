@@ -25,9 +25,9 @@ string grpPsych     = "12 — Psychological Levels"
 string grpInstitutional = "13 — Institutional Zones + Review"
 
 // TIMEFRAMES
-string executionTF = input.timeframe("15", "Execution timeframe", group=grpTF)
+string executionTF = input.timeframe("5", "Execution timeframe", group=grpTF)
 string directionTF = input.timeframe("60", "Directional timeframe", group=grpTF)
-string macroTF     = input.timeframe("240", "Macro timeframe", group=grpTF)
+string macroTF     = input.timeframe("15", "Macro timeframe", group=grpTF)
 
 // EMA TREND
 int fastLength = input.int(9, "Fast EMA", minval=1, group=grpEMA)
@@ -446,7 +446,7 @@ string sessionZone = input.string(
 // VISUALS
 bool showFastEMA = input.bool(true, "Show Fast EMA", group=grpVisuals)
 bool showMidEMA = input.bool(true, "Show Medium EMA", group=grpVisuals)
-bool showSlowEMA = input.bool(true, "Show Fast EMA0", group=grpVisuals)
+bool showSlowEMA = input.bool(true, "Show Fast EMA", group=grpVisuals)
 bool showDashboard = input.bool(true, "Show dashboard", group=grpVisuals)
 bool showSignals = input.bool(true, "Show BUY/SELL labels", group=grpVisuals)
 bool showTradePlan = input.bool(true, "Show latest trade plan", group=grpVisuals)
