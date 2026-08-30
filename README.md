@@ -222,6 +222,8 @@ as the bridge key.
 
 The bridge key is intended for communication with the user's own bridge system and should be treated as a private credential.
 
+Note: This repository does NOT include server-side MT5 bridge code. The automationKey value is a placeholder — you must implement or configure your own secure bridge endpoint if you intend to use MT5 automation. Do not share or store real broker credentials in this repository.
+
 If you are only testing the TradingView indicator, you do **not** need to enable MT5 automation.
 
 ---
@@ -231,7 +233,8 @@ If you are only testing the TradingView indicator, you do **not** need to enable
 1. Open TradingView.
 2. Open an XAUUSD chart.
 3. Open the Pine Editor.
-4. Copy the contents of `BeltandBraces_V8.1.pine`.
+4. Copy the contents of `beltandbraces-script.pine` (this repository's canonical filename).
+   - If you have a file named `BeltandBraces_V8.1.pine` locally, it is functionally the same; the file included here is named `beltandbraces-script.pine`.
 5. Paste the script into the Pine Editor.
 6. Add the indicator to the chart.
 7. Start with the default settings.
@@ -270,6 +273,8 @@ If you see a move that you believe Belt & Braces should have caught, please repo
 ### False signals
 
 If the indicator produces a BUY or SELL that you believe should not have occurred, report it.
+
+When filing reports, please use this repository's issue templates (see .github/ISSUE_TEMPLATE/bug_report.md) to help standardise reports.
 
 ---
 
