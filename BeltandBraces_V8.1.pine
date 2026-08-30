@@ -1,0 +1,1000 @@
+//@version=6
+indicator("GoldEdge V8.1 — Fast EMA + Adaptive Extension + MT5 Automation", shorttitle="Belt and braces ", overlay=true, max_labels_count=300, max_boxes_count=50, max_lines_count=50)
+
+//=============================================================================
+// V8.1 UPGRADE
+// Retains all V8.0 tracking, diagnostics and institutional zones.
+// All former EMA20 entry/extension logic now follows the adjustable Fast EMA.
+// Adds score-adaptive extension limits so Grade A/A+ trends can enter farther from Fast EMA.
+//=============================================================================
+
+// INPUT GROUPS
+string grpTF       = "01 — Timeframes"
+string grpEMA      = "02 — EMA Trend"
+string grpMomentum = "03 — Momentum"
+string grpDecision = "04 — Decision Engine"
+string grpEntry    = "05 — Entry Engine"
+string grpRisk     = "06 — Safe Trade Planner"
+string grpExit     = "07 — Exit Warning"
+string grpZones    = "08 — AI Dashboard + Zones"
+string grpStructurePlan = "09 — Structure Trade Engine"
+string grpSession  = "10 — Sessions"
+string grpVisuals  = "11 — Visuals"
+string grpAuto = "AUTOMATION — MT5 BRIDGE"
+string grpPsych     = "12 — Psychological Levels"
+string grpInstitutional = "13 — Institutional Zones + Review"
+
+// TIMEFRAMES
+string executionTF = input.timeframe("5", "Execution timeframe", group=grpTF)
+string directionTF = input.timeframe("60", "Directional timeframe", group=grpTF)
+string macroTF     = input.timeframe("15", "Macro timeframe", group=grpTF)
+
+// EMA TREND
+int fastLength = input.int(9, "Fast EMA", minval=1, group=grpEMA)
+int midLength  = input.int(21, "Medium EMA", minval=2, group=grpEMA)
+int slowLength = input.int(50, "Slow EMA", minval=3, group=grpEMA)
+int atrLength  = input.int(14, "ATR length", minval=1, group=grpEMA)
+
+float minimumGapATR = input.float(
+     0.08,
+     "Minimum Fast/Medium EMA separation in ATR",
+     minval=0.0,
+     maxval=3.0,
+     step=0.01,
+     group=grpEMA)
+
+// MOMENTUM
+int rsiLength = input.int(14, "RSI length", minval=2, group=grpMomentum)
+int diLength = input.int(14, "DI length", minval=2, group=grpMomentum)
+int adxSmoothing = input.int(14, "ADX smoothing", minval=2, group=grpMomentum)
+
+float minimumADX = input.float(
+     18.0,
+     "Minimum ADX",
+     minval=1.0,
+     maxval=60.0,
+     step=0.5,
+     group=grpMomentum)
+
+float strongADX = input.float(
+     25.0,
+     "Strong ADX",
+     minval=1.0,
+     maxval=70.0,
+     step=0.5,
+     group=grpMomentum)
+
+// DECISION ENGINE
+int actionThreshold = input.int(
+     70,
+     "Action threshold",
+     minval=50,
+     maxval=95,
+     group=grpDecision)
+
+int minimumScoreEdge = input.int(
+     15,
+     "Minimum bull/bear score edge",
+     minval=5,
+     maxval=50,
+     group=grpDecision)
+
+float maximumExtensionATR = input.float(
+     1.20,
+     "Base maximum distance from Fast EMA in ATR",
+     minval=0.20,
+     maxval=5.00,
+     step=0.05,
+     group=grpDecision)
+
+bool useAdaptiveExtension = input.bool(
+     true,
+     "Adapt extension limit for Grade A/A+ trends",
+     group=grpDecision)
+
+float gradeAExtensionATR = input.float(
+     1.80,
+     "Grade A maximum distance from Fast EMA in ATR",
+     minval=0.20,
+     maxval=5.00,
+     step=0.05,
+     group=grpDecision)
+
+float gradeAPlusExtensionATR = input.float(
+     2.20,
+     "Grade A+ maximum distance from Fast EMA in ATR",
+     minval=0.20,
+     maxval=6.00,
+     step=0.05,
+     group=grpDecision)
+
+
+// ENTRY ENGINE
+float pullbackDistanceATR = input.float(
+     0.30,
+     "Maximum pullback distance from Fast EMA in ATR",
+     minval=0.05,
+     maxval=2.00,
+     step=0.05,
+     group=grpEntry)
+
+int cooldownBars = input.int(
+     8,
+     "Signal cooldown bars",
+     minval=1,
+     maxval=100,
+     group=grpEntry)
+
+bool requireCandleConfirmation = input.bool(
+     true,
+     "Require confirming candle direction",
+     group=grpEntry)
+
+bool requireExecutionAlignment = input.bool(
+     true,
+     "Require execution timeframe alignment",
+     group=grpEntry)
+
+bool allowBreakoutEntry = input.bool(
+     false,
+     "Allow breakout entry without Fast EMA pullback",
+     group=grpEntry)
+
+bool enableBGradeEntries = input.bool(
+     true,
+     "Enable B-grade continuation entries",
+     group=grpEntry)
+
+int bGradeScoreDiscount = input.int(
+     10,
+     "B-grade score discount",
+     minval=0,
+     maxval=25,
+     group=grpEntry)
+
+int bGradeMinimumEdge = input.int(
+     8,
+     "B-grade minimum score edge",
+     minval=3,
+     maxval=30,
+     group=grpEntry)
+
+float bGradePullbackATR = input.float(
+     0.55,
+     "B-grade Fast EMA pullback distance in ATR",
+     minval=0.10,
+     maxval=2.00,
+     step=0.05,
+     group=grpEntry)
+
+float bGradeMaximumExtensionATR = input.float(
+     0.85,
+     "B-grade base maximum extension from Fast EMA in ATR",
+     minval=0.20,
+     maxval=3.00,
+     step=0.05,
+     group=grpEntry)
+
+int continuationBreakoutBars = input.int(
+     3,
+     "B-grade continuation breakout bars",
+     minval=2,
+     maxval=10,
+     group=grpEntry)
+
+
+
+// PSYCHOLOGICAL PRICE LEVELS
+bool showPsychLevels = input.bool(true, "Show psychological levels", group=grpPsych)
+bool showQuarterLevels = input.bool(true, "Show $25 quarter levels", group=grpPsych)
+int psychLevelsEachSide = input.int(4, "Levels above/below price", minval=1, maxval=8, group=grpPsych)
+int psychLineLookback = input.int(300, "Line length (bars left)", minval=25, maxval=2000, group=grpPsych)
+bool showPsychLabels = input.bool(true, "Show level labels", group=grpPsych)
+
+// SAFE TRADE PLANNER
+float stopATR = input.float(
+     1.20,
+     "Base stop distance in ATR",
+     minval=0.30,
+     maxval=5.00,
+     step=0.05,
+     group=grpRisk)
+
+string stopLossMode = input.string(
+     "ATR / Structure",
+     "Stop-loss mode",
+     options=["ATR / Structure", "Fixed 100 pips"],
+     tooltip="Fixed 100 pips uses a $10.00 stop distance on XAUUSD (100 × $0.10).",
+     group=grpRisk)
+
+float fixed100PipDistance = 10.00
+
+int swingLookback = input.int(
+     8,
+     "Swing lookback bars",
+     minval=2,
+     maxval=50,
+     group=grpRisk)
+
+float swingBufferATR = input.float(
+     0.10,
+     "Swing buffer in ATR",
+     minval=0.00,
+     maxval=1.00,
+     step=0.05,
+     group=grpRisk)
+
+float maximumStopATR = input.float(
+     3.00,
+     "Maximum allowed stop distance in ATR",
+     minval=0.50,
+     maxval=10.00,
+     step=0.25,
+     group=grpRisk)
+
+float tp1R = input.float(1.0, "TP1 reward multiple", minval=0.5, maxval=5.0, step=0.25, group=grpRisk)
+float tp2R = input.float(2.0, "TP2 reward multiple", minval=0.5, maxval=8.0, step=0.25, group=grpRisk)
+float tp3R = input.float(3.0, "TP3 reward multiple", minval=0.5, maxval=12.0, step=0.25, group=grpRisk)
+
+int planExpiryBars = input.int(
+     24,
+     "Plan expiry bars",
+     minval=1,
+     maxval=200,
+     group=grpRisk)
+
+
+// EXIT WARNING
+bool useExitWarning = input.bool(
+     true,
+     "Enable exit warnings",
+     group=grpExit)
+
+int exitScoreEdge = input.int(
+     8,
+     "Warn when score edge falls below",
+     minval=0,
+     maxval=40,
+     group=grpExit)
+
+float exitADX = input.float(
+     16.0,
+     "Weak momentum ADX level",
+     minval=1.0,
+     maxval=50.0,
+     step=0.5,
+     group=grpExit)
+
+int expiryWarningBars = input.int(
+     3,
+     "Warn this many bars before expiry",
+     minval=1,
+     maxval=20,
+     group=grpExit)
+
+bool warnOnEMA20Loss = input.bool(
+     true,
+     "Warn on Fast EMA loss",
+     group=grpExit)
+
+bool warnOnOppositeScore = input.bool(
+     true,
+     "Warn when opposite score takes control",
+     group=grpExit)
+
+
+// AI DASHBOARD + DYNAMIC ZONES
+float zoneHalfWidthATR = input.float(
+     0.20,
+     "Zone half-width in ATR",
+     minval=0.05,
+     maxval=1.50,
+     step=0.05,
+     group=grpZones)
+
+int zoneProjectionBars = input.int(
+     18,
+     "Zone projection bars",
+     minval=3,
+     maxval=100,
+     group=grpZones)
+
+bool requireBiasForZone = input.bool(
+     true,
+     "Only show zone when directional bias is ready",
+     group=grpZones)
+
+bool showMTFRibbon = input.bool(
+     true,
+     "Show multi-timeframe ribbon",
+     group=grpZones)
+
+bool compactDashboard = input.bool(
+     true,
+     "Use compact AI dashboard",
+     group=grpZones)
+
+float zoneApproachATR = input.float(
+     0.50,
+     "Approaching-zone distance in ATR",
+     minval=0.10,
+     maxval=2.00,
+     step=0.05,
+     group=grpZones)
+
+bool colourZoneByOpportunity = input.bool(
+     true,
+     "Colour zone by opportunity",
+     group=grpZones)
+
+// INSTITUTIONAL ZONES + REVIEW
+bool enableInstitutionalZones = input.bool(true, "Use institutional confluence zones", group=grpInstitutional)
+float institutionalZoneWidth = input.float(4.0, "Zone width ($)", minval=0.5, maxval=20.0, step=0.5, group=grpInstitutional)
+float institutionalEntryInset = input.float(0.5, "Preferred entry inset ($)", minval=0.0, maxval=5.0, step=0.1, group=grpInstitutional)
+int suggestedLayers = input.int(3, "Suggested layers", minval=1, maxval=6, group=grpInstitutional)
+float institutionalPsychStep = input.float(5.0, "Institutional psychological spacing ($)", minval=1.0, maxval=100.0, step=1.0, group=grpInstitutional)
+float confluenceToleranceATR = input.float(0.35, "Confluence tolerance in ATR", minval=0.05, maxval=2.0, step=0.05, group=grpInstitutional)
+bool showLayerLines = input.bool(true, "Show first three suggested layer lines", group=grpInstitutional)
+bool manualCloseCurrentTrade = input.bool(false, "MANUAL CLOSE current trade (turn off after use)", group=grpInstitutional)
+
+
+// PRACTICAL GOLD TARGETS
+float firstTargetDollars = input.float(
+     1.50,
+     "TP1 distance from entry ($)",
+     minval=0.10,
+     maxval=25.00,
+     step=0.10,
+     group=grpStructurePlan)
+
+float targetStepDollars = input.float(
+     2.00,
+     "Additional distance per target ($)",
+     minval=0.10,
+     maxval=25.00,
+     step=0.10,
+     group=grpStructurePlan)
+
+// STRUCTURE TRADE ENGINE
+int structureSwingLeft = input.int(
+     3,
+     "Trade swing pivot left bars",
+     minval=1,
+     maxval=20,
+     group=grpStructurePlan)
+
+int structureSwingRight = input.int(
+     3,
+     "Trade swing pivot right bars",
+     minval=1,
+     maxval=20,
+     group=grpStructurePlan)
+
+int structureLookback = input.int(
+     120,
+     "Structure target lookback bars",
+     minval=20,
+     maxval=500,
+     group=grpStructurePlan)
+
+float stopBufferATR = input.float(
+     0.15,
+     "Stop buffer beyond swing in ATR",
+     minval=0.00,
+     maxval=1.50,
+     step=0.05,
+     group=grpStructurePlan)
+
+float minimumStopATR = input.float(
+     0.60,
+     "Minimum stop distance in ATR",
+     minval=0.20,
+     maxval=5.00,
+     step=0.05,
+     group=grpStructurePlan)
+
+float maximumStructureStopATR = input.float(
+     3.00,
+     "Maximum stop distance in ATR",
+     minval=0.50,
+     maxval=10.00,
+     step=0.25,
+     group=grpStructurePlan)
+
+float minimumTargetR = input.float(
+     0.75,
+     "Minimum target distance in R",
+     minval=0.25,
+     maxval=5.00,
+     step=0.25,
+     group=grpStructurePlan)
+
+float fallbackTP2R = input.float(
+     2.0,
+     "Fallback TP2 reward multiple",
+     minval=1.0,
+     maxval=8.0,
+     step=0.25,
+     group=grpStructurePlan)
+
+float fallbackTP3R = input.float(
+     3.0,
+     "Fallback TP3 reward multiple",
+     minval=1.5,
+     maxval=12.0,
+     step=0.25,
+     group=grpStructurePlan)
+
+int exitWarningMinimumConditions = input.int(
+     2,
+     "Exit warning minimum weakening conditions",
+     minval=2,
+     maxval=4,
+     group=grpStructurePlan)
+
+// SESSIONS
+bool useSessionFilter = input.bool(false, "Require London or New York for action", group=grpSession)
+string londonSession = input.session("0700-1600", "London session", group=grpSession)
+string newYorkSession = input.session("1300-2100", "New York session", group=grpSession)
+
+string sessionZone = input.string(
+     "Europe/London",
+     "Session timezone",
+     options=["Europe/London", "America/New_York", "Etc/UTC"],
+     group=grpSession)
+
+// VISUALS
+bool showFastEMA = input.bool(true, "Show Fast EMA", group=grpVisuals)
+bool showMidEMA = input.bool(true, "Show Medium EMA", group=grpVisuals)
+bool showSlowEMA = input.bool(true, "Show Fast EMA", group=grpVisuals)
+bool showDashboard = input.bool(true, "Show dashboard", group=grpVisuals)
+bool showSignals = input.bool(true, "Show BUY/SELL labels", group=grpVisuals)
+bool showTradePlan = input.bool(true, "Show latest trade plan", group=grpVisuals)
+int initialPlanLineBars = input.int(4, "Minimum initial trade-line length (bars)", minval=1, maxval=20, group=grpVisuals, tooltip="When a new trade first appears, Entry, SL and TP lines extend th[...]
+bool showExitWarnings = input.bool(true, "Show EXIT WARNING labels", group=grpVisuals)
+bool showEntryZones = input.bool(true, "Show dynamic buy/sell zones", group=grpVisuals)
+bool colourBars = input.bool(false, "Colour bars by decision", group=grpVisuals)
+
+string dashboardTradeMode = input.string("Current/latest", "Dashboard trade", options=["Current/latest", "Review historical trade"], group=grpVisuals)
+int selectedTradeNumber = input.int(0, "Historical trade number (0 = latest)", minval=0, maxval=49, group=grpVisuals)
+bool highlightReviewedTrade = input.bool(true, "Highlight reviewed trade on chart", group=grpVisuals)
+bool showAllTradeAnalysisLabels = input.bool(false, "Show analysis labels for all 50 trades", group=grpVisuals)
+bool showRejectedSetupDiagnostics = input.bool(false, "Show blocked/near-miss setup reasons", group=grpVisuals, tooltip="Adds small grey labels when a BUY or SELL nearly qualifies, showing the ma[...]
+
+
+bool enableMT5Automation = input.bool(false, "Enable MT5 automation alerts", group=grpAuto)
+string automationKey = input.string("CHANGE_ME", "Bridge key (do not use broker password)", group=grpAuto)
+string automationSymbol = input.string("XAUUSD", "MT5 symbol", group=grpAuto)
+float automationRiskPct = input.float(0.25, "Requested risk %", minval=0.05, maxval=5.00, step=0.05, group=grpAuto)
+int automationTTLSeconds = input.int(120, "Signal expiry (seconds)", minval=30, maxval=900, group=grpAuto)
+bool automateAGrade = input.bool(true, "Automate A-grade trades", group=grpAuto)
+bool automateBGrade = input.bool(false, "Automate B-grade trades", group=grpAuto)
+
+//=============================================================================
+// HELPER FUNCTIONS
+//=============================================================================
+f_clamp(float value, float minimum, float maximum) =>
+    math.max(minimum, math.min(maximum, value))
+
+f_stateText(bool bull, bool bear) =>
+    string result = "Neutral"
+    if bull and not bear
+        result := "Bullish"
+    else if bear and not bull
+        result := "Bearish"
+    result
+
+f_stateColour(bool bull, bool bear) =>
+    color result = color.silver
+    if bull and not bear
+        result := color.lime
+    else if bear and not bull
+        result := color.red
+    result
+
+f_grade(float score) =>
+    string result = "D"
+    if score >= 88
+        result := "A+"
+    else if score >= 80
+        result := "A"
+    else if score >= 70
+        result := "B"
+    else if score >= 60
+        result := "C"
+    result
+
+f_scoreColour(float score) =>
+    color result = color.red
+    if score >= 80
+        result := color.lime
+    else if score >= 70
+        result := color.new(color.lime, 20)
+    else if score >= 60
+        result := color.orange
+    result
+
+//=============================================================================
+// LOCAL DATA
+//=============================================================================
+float ema20 = ta.ema(close, fastLength)
+float ema50 = ta.ema(close, midLength)
+float ema200 = ta.ema(close, slowLength)
+
+float atrValue = ta.atr(atrLength)
+float rsiValue = ta.rsi(close, rsiLength)
+[plusDI, minusDI, adxValue] = ta.dmi(diLength, adxSmoothing)
+
+float emaGapATR = math.abs(ema20 - ema50) / math.max(atrValue, syminfo.mintick)
+float extensionATR = math.abs(close - ema20) / math.max(atrValue, syminfo.mintick)
+
+bool localBull =
+     close > ema20 and
+     ema20 > ema50 and
+     ema50 > ema200 and
+     ema20 > ema20[1]
+
+bool localBear =
+     close < ema20 and
+     ema20 < ema50 and
+     ema50 < ema200 and
+     ema20 < ema20[1]
+
+//=============================================================================
+// MULTI-TIMEFRAME DATA
+// Separate request.security calls are used deliberately for Pine reliability.
+//=============================================================================
+float execClose = request.security(
+     syminfo.tickerid,
+     executionTF,
+     close,
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float execEMA20 = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, fastLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float execEMA50 = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, midLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float execEMA200 = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, slowLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+bool execEMA20Rising = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, fastLength) > ta.ema(close, fastLength)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+bool execEMA20Falling = request.security(
+     syminfo.tickerid,
+     executionTF,
+     ta.ema(close, fastLength) < ta.ema(close, fastLength)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float directionClose = request.security(
+     syminfo.tickerid,
+     directionTF,
+     close,
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float directionEMA20 = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, fastLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float directionEMA50 = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, midLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float directionEMA200 = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, slowLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+bool directionEMA20Rising = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, fastLength) > ta.ema(close, fastLength)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+bool directionEMA20Falling = request.security(
+     syminfo.tickerid,
+     directionTF,
+     ta.ema(close, fastLength) < ta.ema(close, fastLength)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float macroClose = request.security(
+     syminfo.tickerid,
+     macroTF,
+     close,
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float macroEMA20 = request.security(
+     syminfo.tickerid,
+     macroTF,
+     ta.ema(close, fastLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float macroEMA50 = request.security(
+     syminfo.tickerid,
+     macroTF,
+     ta.ema(close, midLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+float macroEMA200 = request.security(
+     syminfo.tickerid,
+     macroTF,
+     ta.ema(close, slowLength),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off)
+
+//=============================================================================
+// TIMEFRAME STATES
+//=============================================================================
+bool executionBull =
+     execClose > execEMA20 and
+     execEMA20 > execEMA50 and
+     execEMA50 > execEMA200 and
+     execEMA20Rising
+
+bool executionBear =
+     execClose < execEMA20 and
+     execEMA20 < execEMA50 and
+     execEMA50 < execEMA200 and
+     execEMA20Falling
+
+bool directionBull =
+     directionClose > directionEMA20 and
+     directionEMA20 > directionEMA50 and
+     directionEMA50 > directionEMA200 and
+     directionEMA20Rising
+
+bool directionBear =
+     directionClose < directionEMA20 and
+     directionEMA20 < directionEMA50 and
+     directionEMA50 < directionEMA200 and
+     directionEMA20Falling
+
+bool macroBull =
+     macroClose > macroEMA200 and
+     macroEMA20 > macroEMA50
+
+bool macroBear =
+     macroClose < macroEMA200 and
+     macroEMA20 < macroEMA50
+
+//=============================================================================
+// SESSION STATUS
+//=============================================================================
+bool londonActive = not na(time(timeframe.period, londonSession, sessionZone))
+bool newYorkActive = not na(time(timeframe.period, newYorkSession, sessionZone))
+bool overlapActive = londonActive and newYorkActive
+bool sessionActive = londonActive or newYorkActive
+
+string sessionText = "Closed"
+color sessionColour = color.silver
+
+if overlapActive
+    sessionText := "Overlap"
+    sessionColour := color.aqua
+else if londonActive
+    sessionText := "London"
+    sessionColour := color.blue
+else if newYorkActive
+    sessionText := "New York"
+    sessionColour := color.orange
+
+//=============================================================================
+// 100-POINT CONFLUENCE ENGINE
+//=============================================================================
+float bullScoreRaw = 0.0
+float bearScoreRaw = 0.0
+
+// Local trend — 30 points.
+bullScoreRaw += close > ema200 ? 10 : 0
+bearScoreRaw += close < ema200 ? 10 : 0
+
+bullScoreRaw += ema20 > ema50 ? 8 : 0
+bearScoreRaw += ema20 < ema50 ? 8 : 0
+
+bullScoreRaw += ema50 > ema200 ? 7 : 0
+bearScoreRaw += ema50 < ema200 ? 7 : 0
+
+bullScoreRaw += ema20 > ema20[1] ? 5 : 0
+bearScoreRaw += ema20 < ema20[1] ? 5 : 0
+
+// Higher timeframes — 36 points.
+bullScoreRaw += executionBull ? 14 : 0
+bearScoreRaw += executionBear ? 14 : 0
+
+bullScoreRaw += directionBull ? 12 : 0
+bearScoreRaw += directionBear ? 12 : 0
+
+bullScoreRaw += macroBull ? 10 : 0
+bearScoreRaw += macroBear ? 10 : 0
+
+// Momentum — 22 points.
+bullScoreRaw += adxValue >= minimumADX and plusDI > minusDI ? 8 : 0
+bearScoreRaw += adxValue >= minimumADX and minusDI > plusDI ? 8 : 0
+
+bullScoreRaw += adxValue >= strongADX ? 4 : 0
+bearScoreRaw += adxValue >= strongADX ? 4 : 0
+
+bullScoreRaw += rsiValue > 52 and rsiValue < 72 ? 7 : 0
+bearScoreRaw += rsiValue < 48 and rsiValue > 28 ? 7 : 0
+
+bullScoreRaw += emaGapATR >= minimumGapATR ? 3 : 0
+bearScoreRaw += emaGapATR >= minimumGapATR ? 3 : 0
+
+// Session — 4 points.
+bullScoreRaw += sessionActive ? 4 : 0
+bearScoreRaw += sessionActive ? 4 : 0
+
+// Price-location quality — 8 points.
+bullScoreRaw += close > ema20 and extensionATR <= maximumExtensionATR ? 8 : 0
+bearScoreRaw += close < ema20 and extensionATR <= maximumExtensionATR ? 8 : 0
+
+// Overextension and exhaustion penalties.
+if close > ema20 and extensionATR > maximumExtensionATR
+    bullScoreRaw -= 10
+
+if close < ema20 and extensionATR > maximumExtensionATR
+    bearScoreRaw -= 10
+
+if rsiValue >= 75
+    bullScoreRaw -= 8
+
+if rsiValue <= 25
+    bearScoreRaw -= 8
+
+float bullScore = f_clamp(bullScoreRaw, 0, 100)
+float bearScore = f_clamp(bearScoreRaw, 0, 100)
+float scoreEdge = math.abs(bullScore - bearScore)
+
+// Score-adaptive chase protection. Lower grades retain the base limit;
+// Grade A and A+ trends receive extra room when enabled.
+f_extensionLimit(float directionalScore) =>
+    float result = maximumExtensionATR
+    if useAdaptiveExtension
+        if directionalScore >= 88
+            result := math.max(maximumExtensionATR, gradeAPlusExtensionATR)
+        else if directionalScore >= 80
+            result := math.max(maximumExtensionATR, gradeAExtensionATR)
+    result
+
+float bullishExtensionLimitATR = f_extensionLimit(bullScore)
+float bearishExtensionLimitATR = f_extensionLimit(bearScore)
+bool bullishExtensionOK = extensionATR <= bullishExtensionLimitATR
+bool bearishExtensionOK = extensionATR <= bearishExtensionLimitATR
+float activeExtensionLimitATR = bullScore >= bearScore ? bullishExtensionLimitATR : bearishExtensionLimitATR
+
+//=============================================================================
+// DECISION AND ENTRY ENGINE
+//=============================================================================
+bool sessionOK = not useSessionFilter or sessionActive
+bool extensionOK = extensionATR <= activeExtensionLimitATR
+
+bool bullishBiasReady =
+     bullScore >= actionThreshold and
+     bullScore > bearScore and
+     scoreEdge >= minimumScoreEdge and
+     sessionOK
+
+bool bearishBiasReady =
+     bearScore >= actionThreshold and
+     bearScore > bullScore and
+     scoreEdge >= minimumScoreEdge and
+     sessionOK
+
+bool bullishCandleOK = not requireCandleConfirmation or close > open
+bool bearishCandleOK = not requireCandleConfirmation or close < open
+
+bool executionLongOK = not requireExecutionAlignment or executionBull
+bool executionShortOK = not requireExecutionAlignment or executionBear
+
+bool bullishPullbackTouch =
+     low <= ema20 + atrValue * pullbackDistanceATR and
+     close > ema20
+
+bool bearishPullbackTouch =
+     high >= ema20 - atrValue * pullbackDistanceATR and
+     close < ema20
+
+bool bullishBreakout =
+     allowBreakoutEntry and
+     close > high[1] and
+     close > ema20 and
+     bullishExtensionOK
+
+bool bearishBreakout =
+     allowBreakoutEntry and
+     close < low[1] and
+     close < ema20 and
+     bearishExtensionOK
+
+// A-grade trigger: the original high-confluence pullback setup.
+bool bullishATrigger =
+     (bullishPullbackTouch or bullishBreakout) and
+     bullishCandleOK and
+     executionLongOK and
+     bullishExtensionOK
+
+bool bearishATrigger =
+     (bearishPullbackTouch or bearishBreakout) and
+     bearishCandleOK and
+     executionShortOK and
+     bearishExtensionOK
+
+// B-grade bias: slightly lower score requirements, but trend must still agree.
+float bGradeThreshold = math.max(actionThreshold - bGradeScoreDiscount, 50)
+float bullishBGradeExtensionLimitATR = useAdaptiveExtension and bullScore >= 80 ? math.max(bGradeMaximumExtensionATR, bullishExtensionLimitATR) : bGradeMaximumExtensionATR
+float bearishBGradeExtensionLimitATR = useAdaptiveExtension and bearScore >= 80 ? math.max(bGradeMaximumExtensionATR, bearishExtensionLimitATR) : bGradeMaximumExtensionATR
+
+bool bullishBGradeBias =
+     enableBGradeEntries and
+     bullScore >= bGradeThreshold and
+     bullScore > bearScore and
+     scoreEdge >= bGradeMinimumEdge and
+     sessionOK and
+     localBull and
+     not executionBear
+
+bool bearishBGradeBias =
+     enableBGradeEntries and
+     bearScore >= bGradeThreshold and
+     bearScore > bullScore and
+     scoreEdge >= bGradeMinimumEdge and
+     sessionOK and
+     localBear and
+     not executionBull
+
+bool bullishBGradePullback =
+     low <= ema20 + atrValue * bGradePullbackATR and
+     close > ema20 and
+     close > open and
+     close >= close[1]
+
+bool bearishBGradePullback =
+     high >= ema20 - atrValue * bGradePullbackATR and
+     close < ema20 and
+     close < open and
+     close <= close[1]
+
+float priorContinuationHigh = ta.highest(high, continuationBreakoutBars)[1]
+float priorContinuationLow = ta.lowest(low, continuationBreakoutBars)[1]
+
+bool bullishContinuation =
+     close > priorContinuationHigh and
+     close > ema20 and
+     ema20 > ema50 and
+     extensionATR <= bullishBGradeExtensionLimitATR
+
+bool bearishContinuation =
+     close < priorContinuationLow and
+     close < ema20 and
+     ema20 < ema50 and
+     extensionATR <= bearishBGradeExtensionLimitATR
+
+bool bullishBTrigger =
+     bullishBGradeBias and
+     (bullishBGradePullback or bullishContinuation) and
+     extensionATR <= bullishBGradeExtensionLimitATR
+
+bool bearishBTrigger =
+     bearishBGradeBias and
+     (bearishBGradePullback or bearishContinuation) and
+     extensionATR <= bearishBGradeExtensionLimitATR
+
+// Backward-compatible combined triggers.
+bool bullishTrigger = bullishATrigger or bullishBTrigger
+bool bearishTrigger = bearishATrigger or bearishBTrigger
+
+
+//=============================================================================
+// STRUCTURE LEVEL ENGINE
+//=============================================================================
+float tradePivotHigh = ta.pivothigh(high, structureSwingLeft, structureSwingRight)
+float tradePivotLow = ta.pivotlow(low, structureSwingLeft, structureSwingRight)
+
+var float structureHigh1 = na
+var float structureHigh2 = na
+var float structureHigh3 = na
+var float structureLow1 = na
+var float structureLow2 = na
+var float structureLow3 = na
+
+if not na(tradePivotHigh)
+    structureHigh3 := structureHigh2
+    structureHigh2 := structureHigh1
+    structureHigh1 := tradePivotHigh
+
+if not na(tradePivotLow)
+    structureLow3 := structureLow2
+    structureLow2 := structureLow1
+    structureLow1 := tradePivotLow
+
+f_validLongTarget(float level, float entry, float minimumDistance) =>
+    not na(level) and level > entry + minimumDistance
+
+f_validShortTarget(float level, float entry, float minimumDistance) =>
+    not na(level) and level < entry - minimumDistance
+
+var int lastSignalBar = na
+var int planDirection = 0
+var int planStartBar = na
+var float planEntry = na
+var float planStop = na
+var float planTP1 = na
+var float planTP2 = na
+var float planTP3 = na
+var string planStatus = "Waiting"
+var string planSetupGrade = "—"
+var bool exitWarningIssued = false
+var string exitWarningReason = "None"
+
+// Retained trade history. Index 0 is the newest signal.
+var array<int> histDirection = array.new_int()
+var array<int> histStartBar = array.new_int()
+var array<float> histEntry = array.new_float()
+var array<float> histStop = array.new_float()
+var array<float> histTP1 = array.new_float()
+var array<float> histTP2 = array.new_float()
+var array<float> histTP3 = array.new_float()
+var array<string> histGrade = array.new_string()
+var array<float> histBullScore = array.new_float()
+var array<float> histBearScore = array.new_float()
+var array<float> histADX = array.new_float()
+var array<float> histRSI = array.new_float()
+var array<string> histStatus = array.new_string()
+var array<string> histExitReason = array.new_string()
+var array<int> histBars = array.new_int()
+var array<bool> histTP1Hit = array.new_bool()
+var array<bool> histTP2Hit = array.new_bool()
+var array<bool> histTP3Hit = array.new_bool()
+var array<bool> histStopHit = array.new_bool()
+// Maximum favourable movement measured from the bar AFTER entry through the
+// full original plan-expiry window, even when TP3 closes the live plan early.
+var array<float> histMaxFavourable = array.new_float()
+var array<float> histBeyondTP3 = array.new_float()
+
+f_trimTradeHistory() =>
+    if array.size(histDirection) > 50
+        array.pop(histDirection)
+        array.pop(histStartBar)
+        array.pop(histEntry)
+        array.pop(histStop)
+        array.pop(histTP1)
+        array.pop(histTP2)
+        array.pop(histTP3)
+        array.pop(histGrade)
+        array.pop(histBullScore)
+        array.pop(histBearScore)
+        array.pop(histADX)
